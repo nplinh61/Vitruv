@@ -34,9 +34,7 @@ class FileOperationTest {
                 () -> assertEquals(FileOperation.ADDED,    FileOperation.valueOf("ADDED")),
                 () -> assertEquals(FileOperation.MODIFIED, FileOperation.valueOf("MODIFIED")),
                 () -> assertEquals(FileOperation.DELETED,  FileOperation.valueOf("DELETED")),
-                () -> assertEquals(FileOperation.RENAMED,  FileOperation.valueOf("RENAMED")),
-                () -> assertEquals(FileOperation.COPIED,   FileOperation.valueOf("COPIED"))
-        );
+                () -> assertEquals(FileOperation.RENAMED,  FileOperation.valueOf("RENAMED")));
     }
 
     /**
@@ -52,7 +50,6 @@ class FileOperationTest {
         assertEquals("MODIFIED", FileOperation.MODIFIED.toString());
         assertEquals("DELETED",  FileOperation.DELETED.toString());
         assertEquals("RENAMED",  FileOperation.RENAMED.toString());
-        assertEquals("COPIED",   FileOperation.COPIED.toString());
     }
 
     /**

@@ -337,7 +337,7 @@ public class BranchManager {
     }
     try {
       var topology = new LinkedHashMap<String, List<String>>();
-      try (var stream = Files.list(metadataDir)) {
+      try (var stream = Files.walk(metadataDir)) {
         var metadataFiles = stream
             .filter(p -> p.toString().endsWith(".metadata"))
             .toList();
