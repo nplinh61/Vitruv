@@ -64,6 +64,12 @@ public class BranchAwareVirtualModel implements InternalVirtualModel {
   private String activeBranchName;
 
   /**
+   * Used to ensure branch metadata files exist after every switch.
+   * Covers branches created via git CLI that bypassed {@link BranchManager#createBranch}.
+   */
+  private final BranchManager branchManager;
+
+  /**
    * Accumulates atomic EChanges between commits so they can be serialized into the
    * semantic changelog. Registered as a {@link ChangePropagationListener} on construction
    * and cleared by {@link CommitManager} at commit time.
@@ -89,6 +95,7 @@ public class BranchAwareVirtualModel implements InternalVirtualModel {
     // Resolve the current branch from Git HEAD so activeBranchName is always correct
     VsumFileSystemLayout currentLayout = new VsumFileSystemLayout(repoRoot);
     this.activeBranchName = currentLayout.getCurrentBranch();
+    this.branchManager = new BranchManager(repoRoot);
     activeModel.addChangePropagationListener(changeBuffer);
     LOGGER.info("BranchAwareVirtualModel initialized on branch '{}'", activeBranchName);
   }
@@ -160,6 +167,11 @@ public class BranchAwareVirtualModel implements InternalVirtualModel {
 
       // Update only after successful reload
       activeBranchName = newBranch;
+
+      // Ensure a metadata file exists for the new branch. This covers the VsumReloadWatcher
+      // path (git CLI checkout) where PostCheckoutHandler is not involved.
+      branchManager.ensureMetadataExists(newBranch, oldBranch);
+
       LOGGER.info("V-SUM switched successfully to branch '{}'", newBranch);
     } catch (Exception e) {
       throw new BranchOperationException(
