@@ -121,9 +121,16 @@ class ResourceRepositoryImpl implements ModelRepository {
         // Recreate the change resolver with new UUID resolver
         changeResolver = VitruviusChangeResolverFactory.forUuids(uuidResolver);
 
-        //5.step: load correspondences
-        LOGGER.debug("Discovering models from file system");
+        // 5.step: load models, UUID resolver, and correspondences — mirrors loadExistingModels().
+        // readModelsFile() must come first so model objects are in memory before correspondences
+        // try to resolve their href references. Without this, the UUID resolver stays empty
+        // after reload and throws "unknown element" on the next commitChanges().
         isLoading = true;
+        try {
+            readModelsFile();
+        } catch (IOException e) {
+            LOGGER.warn("Failed to read models file during reload: {}", e.getMessage());
+        }
         try {
             correspondenceModel.loadSerializedCorrespondences(modelsResourceSet);
         } catch (Exception e) {
