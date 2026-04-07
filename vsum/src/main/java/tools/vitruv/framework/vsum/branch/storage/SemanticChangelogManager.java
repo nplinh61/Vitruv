@@ -33,6 +33,7 @@ import org.eclipse.jgit.treewalk.CanonicalTreeParser;
 import tools.vitruv.change.atomic.EChange;
 import tools.vitruv.change.atomic.eobject.CreateEObject;
 import tools.vitruv.change.atomic.eobject.DeleteEObject;
+import tools.vitruv.change.atomic.hid.internal.HierarchicalIdResolver;
 import tools.vitruv.change.atomic.uuid.UuidResolver;
 import tools.vitruv.change.changederivation.persistence.DeltaPersistence;
 import tools.vitruv.framework.vsum.branch.data.FileOperation;
@@ -131,8 +132,18 @@ public class SemanticChangelogManager {
     String shortSha = commitSha.substring(0, Math.min(7, commitSha.length()));
     List<Path> writtenFiles = new ArrayList<>();
 
+    // Build HierarchicalIdResolver from the active resource set if available,
+    // so that each SemanticChangeEntry gets a hierarchicalId for merge engine use.
+    HierarchicalIdResolver hidResolver = null;
+    if (activeResources != null && !activeResources.isEmpty()) {
+      var resourceSet = activeResources.iterator().next().getResourceSet();
+      if (resourceSet != null) {
+        hidResolver = HierarchicalIdResolver.create(resourceSet);
+      }
+    }
+
     // Write JSON changelog
-    EChangeToEntryConverter converter = new EChangeToEntryConverter(uuidResolver);
+    EChangeToEntryConverter converter = new EChangeToEntryConverter(uuidResolver, hidResolver);
     ChangelogDocument document = buildDocument(
         commitSha, branch, author, authorDate, message, parentShas, changesByResource, converter);
 

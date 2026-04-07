@@ -20,6 +20,7 @@ import tools.vitruv.change.atomic.feature.reference.RemoveEReference;
 import tools.vitruv.change.atomic.feature.reference.ReplaceSingleValuedEReference;
 import tools.vitruv.change.atomic.root.InsertRootEObject;
 import tools.vitruv.change.atomic.root.RemoveRootEObject;
+import tools.vitruv.change.atomic.hid.internal.HierarchicalIdResolver;
 import tools.vitruv.change.atomic.uuid.UuidResolver;
 
 /**
@@ -41,12 +42,32 @@ public class EChangeToEntryConverter {
   private final UuidResolver uuidResolver;
 
   /**
+   * Optional resolver for computing {@link tools.vitruv.change.atomic.hid.HierarchicalId}
+   * strings. When {@code null}, the {@code hierarchicalId} field on produced entries is
+   * left {@code null}.
+   */
+  private final HierarchicalIdResolver hierarchicalIdResolver;
+
+  /**
    * Creates a converter that uses the given resolver for UUID lookups.
+   * Hierarchical IDs will not be populated.
    *
    * @param uuidResolver the resolver to use, must not be null.
    */
   public EChangeToEntryConverter(UuidResolver uuidResolver) {
+    this(uuidResolver, null);
+  }
+
+  /**
+   * Creates a converter that uses the given resolvers for UUID and HierarchicalId lookups.
+   *
+   * @param uuidResolver the UUID resolver to use, must not be null.
+   * @param hierarchicalIdResolver the HierarchicalId resolver to use, or {@code null} to skip.
+   */
+  public EChangeToEntryConverter(UuidResolver uuidResolver,
+      HierarchicalIdResolver hierarchicalIdResolver) {
     this.uuidResolver = checkNotNull(uuidResolver, "uuidResolver must not be null");
+    this.hierarchicalIdResolver = hierarchicalIdResolver;
   }
 
   /**
@@ -112,6 +133,8 @@ public class EChangeToEntryConverter {
         .emfType(emfType)
         .elementUuid(resolveUuid(element))
         .eClass(formatEClass(element))
+        .hierarchicalId(resolveHierarchicalId(element))
+        .changeOrigin("original")
         .build();
   }
 
@@ -143,6 +166,8 @@ public class EChangeToEntryConverter {
         .from(formatValue(oldValue))
         .to(formatValue(newValue))
         .containerUuid(resolveContainerUuid(element))
+        .hierarchicalId(resolveHierarchicalId(element))
+        .changeOrigin("original")
         .build();
   }
 
@@ -162,6 +187,8 @@ public class EChangeToEntryConverter {
         .to(formatValue(newValue))
         .position(((UpdateSingleListEntryEChange<?, ?>) change).getIndex())
         .containerUuid(resolveContainerUuid(element))
+        .hierarchicalId(resolveHierarchicalId(element))
+        .changeOrigin("original")
         .build();
   }
 
@@ -181,6 +208,8 @@ public class EChangeToEntryConverter {
         .from(formatValue(oldValue))
         .position(((UpdateSingleListEntryEChange<?, ?>) change).getIndex())
         .containerUuid(resolveContainerUuid(element))
+        .hierarchicalId(resolveHierarchicalId(element))
+        .changeOrigin("original")
         .build();
   }
 
@@ -211,6 +240,8 @@ public class EChangeToEntryConverter {
         .from(oldRef != null ? resolveUuid(oldRef) : null)
         .to(newRef != null ? resolveUuid(newRef) : null)
         .containerUuid(resolveContainerUuid(element))
+        .hierarchicalId(resolveHierarchicalId(element))
+        .changeOrigin("original")
         .build();
   }
 
@@ -232,6 +263,8 @@ public class EChangeToEntryConverter {
         .to(inserted != null ? resolveUuid(inserted) : null)
         .position(((UpdateSingleListEntryEChange<?, ?>) change).getIndex())
         .containerUuid(resolveContainerUuid(element))
+        .hierarchicalId(resolveHierarchicalId(element))
+        .changeOrigin("original")
         .build();
   }
 
@@ -251,6 +284,8 @@ public class EChangeToEntryConverter {
         .from(removed != null ? resolveUuid(removed) : null)
         .position(((UpdateSingleListEntryEChange<?, ?>) change).getIndex())
         .containerUuid(resolveContainerUuid(element))
+        .hierarchicalId(resolveHierarchicalId(element))
+        .changeOrigin("original")
         .build();
   }
 
@@ -266,6 +301,8 @@ public class EChangeToEntryConverter {
         .elementUuid(resolveUuid(element))
         .eClass(formatEClass(element))
         .to(change.getUri())
+        .hierarchicalId(resolveHierarchicalId(element))
+        .changeOrigin("original")
         .build();
   }
 
@@ -279,6 +316,8 @@ public class EChangeToEntryConverter {
         .elementUuid(resolveUuid(element))
         .eClass(formatEClass(element))
         .from(change.getUri())
+        .hierarchicalId(resolveHierarchicalId(element))
+        .changeOrigin("original")
         .build();
   }
 
@@ -300,7 +339,25 @@ public class EChangeToEntryConverter {
         .emfType(emfType)
         .elementUuid(uuid)
         .eClass(eClass)
+        .changeOrigin("original")
         .build();
+  }
+
+  /**
+   * Resolves the {@link tools.vitruv.change.atomic.hid.HierarchicalId} string for the given
+   * element. Returns {@code null} if the resolver is not configured or resolution fails.
+   */
+  private String resolveHierarchicalId(EObject element) {
+    if (element == null || hierarchicalIdResolver == null) {
+      return null;
+    }
+    try {
+      return hierarchicalIdResolver.getAndUpdateId(element).getId();
+    } catch (Exception e) {
+      LOGGER.debug("HierarchicalId resolution failed for element of type '{}': {}",
+          element.eClass() != null ? element.eClass().getName() : "?", e.getMessage());
+      return null;
+    }
   }
 
   private String featureName(FeatureEChange<?, ?> change) {

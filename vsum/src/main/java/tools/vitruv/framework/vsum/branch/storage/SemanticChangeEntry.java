@@ -112,6 +112,32 @@ public class SemanticChangeEntry {
   private final String containerUuid;
 
   /**
+   * Hierarchical position of the affected element within its resource at the time the change
+   * was recorded, expressed as a {@code HierarchicalId} string
+   * (e.g. {@code "//elements/0/children/2"}).
+   *
+   * <p>Complements {@link #elementUuid} for cross-branch element identity: two entries from
+   * different branches refer to the same structural position when their {@code hierarchicalId}
+   * values match, even if UUID resolution is unavailable at merge time.
+   * {@code null} if the hierarchical resolver was not available when this entry was produced.
+   */
+  private final String hierarchicalId;
+
+  /**
+   * Origin of this change relative to the developer's direct action.
+   * <ul>
+   *   <li>{@code "original"}: directly triggered by the developer (user-initiated change).</li>
+   *   <li>{@code "consequential"}: triggered by a consistency rule / reaction in response to
+   *       an original change.</li>
+   * </ul>
+   *
+   * <p>Used during conflict resolution: when two branches modify the same element-feature pair
+   * and one side's change is {@code "original"} while the other is {@code "consequential"},
+   * the original change takes precedence automatically.
+   */
+  private final String changeOrigin;
+
+  /**
    * Zero-based index within the list at which the value was inserted or removed.
    * Only meaningful for multi-valued attribute and reference changes
    * ({@link SemanticChangeType#ATTRIBUTE_VALUE_INSERTED},
@@ -135,6 +161,8 @@ public class SemanticChangeEntry {
     this.referencedElementUuid = builder.referencedElementUuid;
     this.containerUuid = builder.containerUuid;
     this.position = builder.position;
+    this.hierarchicalId = builder.hierarchicalId;
+    this.changeOrigin = builder.changeOrigin;
   }
 
   /**
@@ -170,6 +198,10 @@ public class SemanticChangeEntry {
     private String containerUuid;
 
     private int position = -1;
+
+    private String hierarchicalId;
+
+    private String changeOrigin;
 
     private Builder() {
     }
@@ -263,6 +295,23 @@ public class SemanticChangeEntry {
     }
 
     /**
+     * Sets the hierarchical position string of the affected element within its resource.
+     */
+    public Builder hierarchicalId(String hierarchicalId) {
+      this.hierarchicalId = hierarchicalId;
+      return this;
+    }
+
+    /**
+     * Sets the origin of the change: {@code "original"} for developer-initiated changes,
+     * {@code "consequential"} for reaction-triggered consistency changes.
+     */
+    public Builder changeOrigin(String changeOrigin) {
+      this.changeOrigin = changeOrigin;
+      return this;
+    }
+
+    /**
      * Builds and returns a new {@link SemanticChangeEntry}.
      */
     public SemanticChangeEntry build() {
@@ -289,14 +338,16 @@ public class SemanticChangeEntry {
         && Objects.equals(from, that.from)
         && Objects.equals(to, that.to)
         && Objects.equals(referencedElementUuid, that.referencedElementUuid)
-        && Objects.equals(containerUuid, that.containerUuid);
+        && Objects.equals(containerUuid, that.containerUuid)
+        && Objects.equals(hierarchicalId, that.hierarchicalId)
+        && Objects.equals(changeOrigin, that.changeOrigin);
   }
 
   @Override
   public int hashCode() {
     return Objects.hash(
         index, changeType, emfType, elementUuid, eClass, feature, from, to,
-        referencedElementUuid, containerUuid, position);
+        referencedElementUuid, containerUuid, position, hierarchicalId, changeOrigin);
   }
 
   @Override
@@ -304,7 +355,9 @@ public class SemanticChangeEntry {
     return "SemanticChangeEntry{"
         + "index=" + index
         + ", changeType=" + changeType
+        + ", changeOrigin='" + changeOrigin + '\''
         + ", elementUuid='" + elementUuid + '\''
+        + ", hierarchicalId='" + hierarchicalId + '\''
         + ", containerUuid='" + containerUuid + '\''
         + ", feature='" + feature + '\''
         + ", from='" + from + '\''

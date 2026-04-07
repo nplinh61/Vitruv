@@ -58,6 +58,11 @@ public class BranchManager {
   /**
    * Creates a new {@link BranchManager} for the Git repository at the given path.
    *
+   * <p>Initializes metadata for all branches that already exist in Git but have no
+   * persisted metadata file (e.g., {@code master} created via {@code git init}).
+   * These branches receive {@code "root"} as their parent so that switching back to
+   * them later does not incorrectly inherit the current branch as their parent.
+   *
    * @param repoRoot the root directory of the Git repository, which must contain a
    *                 {@code .git} subdirectory.
    * @throws IllegalArgumentException if the path does not point to a valid Git repository.
@@ -66,6 +71,25 @@ public class BranchManager {
     this.repoRoot = checkNotNull(repoRoot, "Repository root must not be null");
     checkArgument(Files.isDirectory(repoRoot.resolve(".git")),
         "No Git repository found at: %s", repoRoot);
+    initializeMissingMetadata();
+  }
+
+  /**
+   * Creates metadata files for all Git branches that do not yet have one.
+   * Uses {@code "root"} as the parent branch for branches created outside this manager
+   * (e.g., the initial {@code master} branch from {@code git init}).
+   * Called once from the constructor; failures are non-fatal and logged as warnings.
+   */
+  private void initializeMissingMetadata() {
+    try (var git = Git.open(repoRoot.toFile())) {
+      var refs = git.branchList().call();
+      for (var ref : refs) {
+        var name = ref.getName().replace("refs/heads/", "");
+        ensureMetadataExists(name, "root");
+      }
+    } catch (IOException | GitAPIException e) {
+      LOGGER.warn("Failed to initialize branch metadata: {}", e.getMessage());
+    }
   }
 
   /**
