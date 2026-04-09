@@ -9,11 +9,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import org.apache.logging.log4j.LogManager;
@@ -160,6 +156,7 @@ public class CommitManager {
       String branch = repo.getBranch();
       LOGGER.info("Committing on branch '{}': {}", branch, message);
 
+      // stage model files
       List<String> stagedFiles = stageModelFiles(git, options);
       stageBranchMetadata(git, branch, stagedFiles);
 
@@ -171,7 +168,10 @@ public class CommitManager {
             "Nothing to commit, no modified model files found");
       }
 
+      // perform commit
       RevCommit revCommit = git.commit().setMessage(message).call();
+
+      // proceed to write changelog
       String commitSha = revCommit.getName();
       PersonIdent author = revCommit.getAuthorIdent();
       LocalDateTime authorDate = LocalDateTime.ofInstant(
@@ -313,7 +313,7 @@ public class CommitManager {
       Git git, String commitSha, String branch, String authorName,
       LocalDateTime authorDate, RevCommit revCommit) {
     try {
-      java.util.Map<String, java.util.List<EChange<EObject>>> changesByResource =
+      Map<String, List<EChange<EObject>>> changesByResource =
           changeBuffer.drainChanges();
 
       if (changesByResource.isEmpty()) {
@@ -323,22 +323,22 @@ public class CommitManager {
       }
 
       // Collect parent SHAs for three-way merge support
-      java.util.List<String> parentShas = new java.util.ArrayList<>();
+      List<String> parentShas = new ArrayList<>();
       for (RevCommit parent : revCommit.getParents()) {
         parentShas.add(parent.getName());
       }
 
       // Resolve active resources for XMI snapshot writing
       Collection<Resource> activeResources =
-          resourceSupplier != null ? resourceSupplier.get() : java.util.Collections.emptyList();
+          resourceSupplier != null ? resourceSupplier.get() : Collections.emptyList();
 
-      java.util.List<java.nio.file.Path> writtenFiles = changelogManager.write(
+      List<Path> writtenFiles = changelogManager.write(
           commitSha, branch, authorName, authorDate,
           revCommit.getFullMessage().trim(),
           parentShas, changesByResource, activeResources, uuidResolver);
 
       // Stage all written changelog files (JSON + XMI) so they are tracked by Git
-      for (java.nio.file.Path file : writtenFiles) {
+      for (Path file : writtenFiles) {
         String relativePath = repoRoot.relativize(file).toString().replace('\\', '/');
         git.add().addFilepattern(relativePath).call();
         LOGGER.debug("Staged changelog file: {}", file.getFileName());

@@ -109,9 +109,9 @@ public class VsumReloadWatcher {
     running = false;
     if (watcherThread != null) {
       // interrupt the thread in case it is currently sleeping between poll cycles.
-      watcherThread.interrupt();
+      watcherThread.interrupt(); // stop sleep
       try {
-        watcherThread.join(STOP_TIMEOUT_MS);
+        watcherThread.join(STOP_TIMEOUT_MS); // wait for shutdown
       } catch (InterruptedException e) {
         LOGGER.warn("Interrupted while waiting for watcher thread to stop");
         // restore the interrupt flag so the caller can handle it if needed.

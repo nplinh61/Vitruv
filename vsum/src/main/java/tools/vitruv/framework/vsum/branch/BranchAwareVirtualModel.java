@@ -100,16 +100,7 @@ public class BranchAwareVirtualModel implements InternalVirtualModel {
     LOGGER.info("BranchAwareVirtualModel initialized on branch '{}'", activeBranchName);
   }
 
-  /**
-   * Returns the change buffer that accumulates atomic EChanges between commits.
-   * {@link CommitManager} calls {@link SemanticChangeBuffer#drainChanges()} on this buffer
-   * at commit time to produce the semantic changelog.
-   */
-  public SemanticChangeBuffer getChangeBuffer() {
-    return changeBuffer;
-  }
-
-  /**
+    /**
    * Switches the active V-SUM state to the given target branch by reloading the wrapped
    * {@link InternalVirtualModel} in place with the target branch's
    * {@link VsumFileSystemLayout}.
@@ -179,16 +170,7 @@ public class BranchAwareVirtualModel implements InternalVirtualModel {
     }
   }
 
-  /**
-   * Returns the name of the currently active Git branch.
-   *
-   * @return the active branch name, never null.
-   */
-  public String getActiveBranch() {
-    return activeBranchName;
-  }
-
-  /**
+    /**
    * Returns the correspondence model of the currently active branch's V-SUM.
    */
   @Override

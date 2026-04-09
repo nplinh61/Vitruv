@@ -44,7 +44,7 @@ public class VirtualModelImpl implements InternalVirtualModel, ChangePropagation
     //private final VsumFileSystemLayout fileSystemLayout;
     /**Linh:new*/
     private VsumFileSystemLayout fileSystemLayout;
-    private ModelRepository resourceRepository;
+    private final ModelRepository resourceRepository;
 
     private final List<ChangePropagationListener> changePropagationListeners = new LinkedList<>();
     private final List<ChangePropagationObserver> changePropagationObservers = new LinkedList<>();
@@ -79,6 +79,13 @@ public class VirtualModelImpl implements InternalVirtualModel, ChangePropagation
      */
     public void loadExistingModels() {
         resourceRepository.loadExistingModels();
+    }
+
+    @Override
+    public void reload() {
+        LOGGER.info("Reloading VirtualModel after merge for branch '{}'", fileSystemLayout.getCurrentBranch());
+        resourceRepository.reload();
+        LOGGER.info("VirtualModel reloaded successfully after merge");
     }
 
     @Override
@@ -211,13 +218,6 @@ public class VirtualModelImpl implements InternalVirtualModel, ChangePropagation
             throw new IllegalStateException(e);
         }
         VirtualModelRegistry.getInstance().deregisterVirtualModel(this);
-    }
-
-    @Override
-    public void reload() {
-        LOGGER.info("Reloading VirtualModel after merge for branch '{}'", fileSystemLayout.getCurrentBranch());
-        resourceRepository.reload();
-        LOGGER.info("VirtualModel reloaded successfully after merge");
     }
 
     @Override

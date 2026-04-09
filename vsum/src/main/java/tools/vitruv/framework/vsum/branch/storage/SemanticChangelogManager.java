@@ -151,7 +151,9 @@ public class SemanticChangelogManager {
         .resolve(branch).resolve("json");
     Files.createDirectories(jsonDir);
     Path jsonFile = jsonDir.resolve(shortSha + ".json");
+
     Files.writeString(jsonFile, gson.toJson(document));
+
     writtenFiles.add(jsonFile);
     LOGGER.info("JSON changelog written: {} ({} file change(s), {} semantic change(s))",
         jsonFile.getFileName(), document.fileChanges.size(),
@@ -231,26 +233,34 @@ public class SemanticChangelogManager {
     // File changes with semantic entries
     doc.fileChanges = new ArrayList<>();
     int totalSemantic = 0;
-    Set<String> allUuids = new LinkedHashSet<>();
+    Set<String> allUuids = new LinkedHashSet<>();  // ordered set to preserve insertion order for the summary
 
+    // Build the Git diff map once upfront
+    // used to classify each resource as ADDED/MODIFIED/DELETED/RENAMED
     Map<String, DiffEntry> gitDiff = buildGitDiffMap(commitSha);
 
+    // One FileChangeInfo per changed resource
     for (Map.Entry<String, List<EChange<EObject>>> entry : changesByResource.entrySet()) {
       String resourceUri = entry.getKey();
       List<EChange<EObject>> eChanges = entry.getValue();
 
+      // Translate raw EChange objects into human-readable SemanticChangeEntry records
       List<SemanticChangeEntry> entries = converter.convert(eChanges);
       totalSemantic += entries.size();
 
+      // Collect every resolved UUID for the summary's affectedElementUuids list
       entries.stream()
           .filter(e -> e.getElementUuid() != null && !e.getElementUuid().equals("unknown"))
           .map(SemanticChangeEntry::getElementUuid)
           .forEach(allUuids::add);
 
+      // Convert absolute EMF URI to a repo-relative path so it matches Git diff keys
       String relPath = toRelativePath(resourceUri);
       DiffEntry diffEntry = gitDiff.get(relPath);
 
       ChangelogDocument.FileChangeInfo fileInfo = new ChangelogDocument.FileChangeInfo();
+
+      //detect file operation
       fileInfo.operation = detectOperation(relPath, eChanges, gitDiff).name();
       fileInfo.path = relPath;
       if (diffEntry != null && diffEntry.getChangeType() == DiffEntry.ChangeType.RENAME) {
@@ -343,25 +353,27 @@ public class SemanticChangelogManager {
       var repo = git.getRepository();
       var commitId = repo.resolve(commitSha);
       if (commitId == null) {
-        return Map.of();
+        return Map.of(); // initial commit has no parent to diff against
       }
       try (RevWalk revWalk = new RevWalk(repo)) {
-        RevCommit commit = revWalk.parseCommit(commitId);
+        RevCommit commit = revWalk.parseCommit(commitId);  // load commit object from object store
         if (commit.getParentCount() == 0) {
           return Map.of();
         }
         RevCommit parent = revWalk.parseCommit(commit.getParent(0).getId());
         try (ObjectReader reader = repo.newObjectReader()) {
+          // CanonicalTreeParser reads a commit's file tree directly from the Git object store
           CanonicalTreeParser oldTree = new CanonicalTreeParser();
           oldTree.reset(reader, parent.getTree().getId());
           CanonicalTreeParser newTree = new CanonicalTreeParser();
           newTree.reset(reader, commit.getTree().getId());
-
+          // Compute the diff
+          // returns one DiffEntry per changed file
           List<DiffEntry> diffs = git.diff()
               .setOldTree(oldTree)
               .setNewTree(newTree)
               .call();
-
+          // Index by new path so callers can look up a resource's DiffEntry by its current path
           Map<String, DiffEntry> result = new HashMap<>();
           for (DiffEntry entry : diffs) {
             result.put(entry.getNewPath(), entry);

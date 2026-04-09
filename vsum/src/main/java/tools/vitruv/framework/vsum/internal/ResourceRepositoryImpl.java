@@ -76,6 +76,7 @@ class ResourceRepositoryImpl implements ModelRepository {
         isLoading = false;
     }
 
+    @Override
     public void reload(VsumFileSystemLayout newLayout) {
         // redirect to new file system layout
         // everything that reads from disk after this point will read from the new branch's dir
@@ -121,7 +122,7 @@ class ResourceRepositoryImpl implements ModelRepository {
         // Recreate the change resolver with new UUID resolver
         changeResolver = VitruviusChangeResolverFactory.forUuids(uuidResolver);
 
-        // 5.step: load models, UUID resolver, and correspondences — mirrors loadExistingModels().
+        // 5.step: load models, UUID resolver, and correspondences - mirrors loadExistingModels().
         // readModelsFile() must come first so model objects are in memory before correspondences
         // try to resolve their href references. Without this, the UUID resolver stays empty
         // after reload and throws "unknown element" on the next commitChanges().
@@ -137,7 +138,6 @@ class ResourceRepositoryImpl implements ModelRepository {
             LOGGER.warn("Failed to load correspondences (will rebuild as needed): {}", e.getMessage());
         }
         isLoading = false;
-
 
         // 6.step: resume recording if it was active before
         if (wasRecording) {

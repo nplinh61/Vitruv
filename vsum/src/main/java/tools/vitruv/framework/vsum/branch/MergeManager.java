@@ -122,7 +122,7 @@ public class MergeManager {
 
       ModelMergeResult result = buildResult(jgitResult, sourceBranch, targetBranch, repo);
 
-      if (result.isSuccessful()
+      if (!result.isSuccessful()
           || result.getStatus() == ModelMergeResult.MergeStatus.CONFLICTING) {
         writeMergeMetadataDirectly(result, sourceBranch, targetBranch);
       }
