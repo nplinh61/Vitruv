@@ -9,6 +9,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
@@ -19,6 +20,7 @@ import org.eclipse.emf.ecore.resource.Resource;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.Status;
 import org.eclipse.jgit.api.errors.GitAPIException;
+import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.PersonIdent;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.revwalk.RevCommit;
@@ -27,6 +29,7 @@ import tools.vitruv.change.atomic.uuid.UuidResolver;
 import tools.vitruv.framework.vsum.branch.data.BranchMetadata;
 import tools.vitruv.framework.vsum.branch.data.CommitOptions;
 import tools.vitruv.framework.vsum.branch.data.CommitResult;
+import tools.vitruv.framework.vsum.branch.data.CommitSummary;
 import tools.vitruv.framework.vsum.branch.exception.BranchOperationException;
 import tools.vitruv.framework.vsum.branch.storage.SemanticChangeBuffer;
 import tools.vitruv.framework.vsum.branch.storage.SemanticChangelogManager;
@@ -119,6 +122,85 @@ public class CommitManager {
     this.resourceSupplier =
         checkNotNull(resourceSupplier, "resourceSupplier must not be null");
     LOGGER.info("Semantic change tracking attached to CommitManager");
+  }
+
+  /**
+   * Returns a summary of all commits reachable from the tip of the given branch, newest first.
+   *
+   * <p>For each commit, the semantic changelog JSON is checked. If a changelog exists for the
+   * commit, {@link CommitSummary#hasChangelog()} is {@code true} and
+   * {@link CommitSummary#totalSemanticChanges()} reflects the stored count.
+   *
+   * @param branch the branch name to walk.
+   * @return ordered list of commit summaries, newest first.
+   * @throws BranchOperationException if the branch does not exist or the repository cannot
+   *     be read.
+   */
+  public List<CommitSummary> listCommits(String branch) throws BranchOperationException {
+    checkNotNull(branch, "branch must not be null");
+    try (Git git = Git.open(repoRoot.toFile())) {
+      Repository repo = git.getRepository();
+      ObjectId branchId = repo.resolve(branch);
+      if (branchId == null) {
+        throw new BranchOperationException("Branch not found: " + branch);
+      }
+      List<CommitSummary> result = new ArrayList<>();
+      for (RevCommit commit : git.log().add(branchId).call()) {
+        String sha = commit.getName();
+        String shortSha = sha.substring(0, 7);
+        PersonIdent author = commit.getAuthorIdent();
+        String authorDate = LocalDateTime
+            .ofInstant(Instant.ofEpochMilli(author.getWhen().getTime()), ZoneId.systemDefault())
+            .format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+        List<String> parentShas = Arrays.stream(commit.getParents())
+            .map(RevCommit::getName)
+            .toList();
+
+        boolean hasChangelog = false;
+        int totalSemanticChanges = 0;
+        try {
+          SemanticChangelogManager.ChangelogDocument doc = changelogManager.read(branch, shortSha);
+          if (doc != null) {
+            hasChangelog = true;
+            totalSemanticChanges = doc.summary.totalSemanticChanges;
+          }
+        } catch (IOException e) {
+          LOGGER.debug("Could not read changelog for commit {}: {}", shortSha, e.getMessage());
+        }
+
+        result.add(new CommitSummary(
+            sha, shortSha, branch,
+            author.getName(), author.getEmailAddress(),
+            authorDate, commit.getFullMessage().trim(),
+            parentShas, hasChangelog, totalSemanticChanges));
+      }
+      return result;
+    } catch (GitAPIException e) {
+      throw new BranchOperationException("Failed to list commits: " + e.getMessage(), e);
+    } catch (IOException e) {
+      throw new BranchOperationException("Failed to open repository: " + e.getMessage(), e);
+    }
+  }
+
+  /**
+   * Reads the semantic changelog for the given branch and short SHA.
+   *
+   * @param branch   the branch name.
+   * @param shortSha the 7-character short SHA of the commit.
+   * @return the parsed {@link SemanticChangelogManager.ChangelogDocument}, or {@code null}
+   *     if no changelog file exists for this commit.
+   * @throws BranchOperationException if the file exists but cannot be read.
+   */
+  public SemanticChangelogManager.ChangelogDocument readChangelog(String branch, String shortSha)
+      throws BranchOperationException {
+    checkNotNull(branch, "branch must not be null");
+    checkNotNull(shortSha, "shortSha must not be null");
+    try {
+      return changelogManager.read(branch, shortSha);
+    } catch (IOException e) {
+      throw new BranchOperationException(
+          "Failed to read changelog for " + shortSha + ": " + e.getMessage(), e);
+    }
   }
 
   /**

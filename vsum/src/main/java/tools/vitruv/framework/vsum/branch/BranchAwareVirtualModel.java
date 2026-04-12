@@ -56,7 +56,11 @@ public class BranchAwareVirtualModel implements InternalVirtualModel {
    */
   private final Path repoRoot;
 
-  /**
+    public String getActiveBranch() {
+        return activeBranchName;
+    }
+
+    /**
    * Name of the currently active branch. Kept in sync with the layout inside
    * {@link #activeModel} after every successful switch.
    * Updated only after a successful reload so that it always reflects real state.
@@ -69,7 +73,11 @@ public class BranchAwareVirtualModel implements InternalVirtualModel {
    */
   private final BranchManager branchManager;
 
-  /**
+    public SemanticChangeBuffer getChangeBuffer() {
+        return changeBuffer;
+    }
+
+    /**
    * Accumulates atomic EChanges between commits so they can be serialized into the
    * semantic changelog. Registered as a {@link ChangePropagationListener} on construction
    * and cleared by {@link CommitManager} at commit time.
