@@ -35,6 +35,7 @@ public class BranchMetadata {
 
   private final String name;
   private BranchState state;
+  private MaturityLevel maturity;
   private final String parent;
   private final LocalDateTime createdAt;
   private LocalDateTime lastModified;
@@ -47,14 +48,16 @@ public class BranchMetadata {
    * @param parent name of the branch this branch was forked from.
    * @param createdAt creation timestamp.
    * @param lastModified last modification timestamp.
+   * @param maturity initial maturity level; use {@link MaturityLevel#DRAFT} for new branches.
    */
   public BranchMetadata(String name, BranchState state, String parent,
-      LocalDateTime createdAt, LocalDateTime lastModified) {
+      LocalDateTime createdAt, LocalDateTime lastModified, MaturityLevel maturity) {
     this.name = checkNotNull(name, "branch name must not be null");
     this.state = checkNotNull(state, "branch state must not be null");
     this.parent = checkNotNull(parent, "branch parent must not be null");
     this.createdAt = checkNotNull(createdAt, "branch creation time must not be null");
     this.lastModified = checkNotNull(lastModified, "branch last modified time must not be null");
+    this.maturity = checkNotNull(maturity, "branch maturity must not be null");
   }
 
   /**
@@ -64,6 +67,16 @@ public class BranchMetadata {
    */
   public void setState(BranchState state) {
     this.state = checkNotNull(state, "branch state must not be null");
+    this.lastModified = LocalDateTime.now();
+  }
+
+  /**
+   * Updates the maturity level and refreshes {@code lastModified} to now.
+   *
+   * @param maturity the new maturity level, must not be null.
+   */
+  public void setMaturity(MaturityLevel maturity) {
+    this.maturity = checkNotNull(maturity, "maturity must not be null");
     this.lastModified = LocalDateTime.now();
   }
 
@@ -88,6 +101,7 @@ public class BranchMetadata {
     JsonObject json = new JsonObject();
     json.addProperty("branchName", name);
     json.addProperty("state", state.name());
+    json.addProperty("maturity", maturity.name());
     json.addProperty("parentBranch", parent);
     json.addProperty("createdAt", createdAt.format(TIMESTAMP_FORMAT));
     json.addProperty("lastModified", lastModified.format(TIMESTAMP_FORMAT));
@@ -110,6 +124,9 @@ public class BranchMetadata {
 
     String name = requireField(json, "branchName", path);
     BranchState state = BranchState.valueOf(requireField(json, "state", path));
+    MaturityLevel maturity = json.has("maturity") && !json.get("maturity").isJsonNull()
+        ? MaturityLevel.valueOf(json.get("maturity").getAsString())
+        : MaturityLevel.DRAFT;
     String parent = requireField(json, "parentBranch", path);
     LocalDateTime createdAt = LocalDateTime.parse(
         requireField(json, "createdAt", path), TIMESTAMP_FORMAT);
@@ -117,7 +134,7 @@ public class BranchMetadata {
         requireField(json, "lastModified", path), TIMESTAMP_FORMAT);
 
     LOGGER.debug("read branch metadata from {}", path);
-    return new BranchMetadata(name, state, parent, createdAt, lastModified);
+    return new BranchMetadata(name, state, parent, createdAt, lastModified, maturity);
   }
 
   private static String requireField(JsonObject json, String key, Path path) {
