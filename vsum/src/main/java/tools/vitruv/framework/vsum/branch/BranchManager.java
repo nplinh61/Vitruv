@@ -20,6 +20,7 @@ import org.eclipse.jgit.api.errors.GitAPIException;
 import org.eclipse.jgit.lib.Repository;
 import tools.vitruv.framework.vsum.branch.data.BranchMetadata;
 import tools.vitruv.framework.vsum.branch.data.BranchState;
+import tools.vitruv.framework.vsum.branch.data.MaturityLevel;
 import tools.vitruv.framework.vsum.branch.exception.BranchOperationException;
 import tools.vitruv.framework.vsum.branch.handler.PostCheckoutHandler;
 
@@ -60,8 +61,9 @@ public class BranchManager {
    *
    * <p>Initializes metadata for all branches that already exist in Git but have no
    * persisted metadata file (e.g., {@code master} created via {@code git init}).
-   * These branches receive {@code "root"} as their parent so that switching back to
-   * them later does not incorrectly inherit the current branch as their parent.
+   * These branches use their own name as parent (self-referential root), consistent
+   * with the post-checkout hook which sets {@code OLD_BRANCH=NEW_BRANCH} for
+   * {@code master}/{@code main}.
    *
    * @param repoRoot the root directory of the Git repository, which must contain a
    *                 {@code .git} subdirectory.
@@ -76,7 +78,7 @@ public class BranchManager {
 
   /**
    * Creates metadata files for all Git branches that do not yet have one.
-   * Uses {@code "root"} as the parent branch for branches created outside this manager
+   * Uses the branch's own name as parent for branches created outside this manager
    * (e.g., the initial {@code master} branch from {@code git init}).
    * Called once from the constructor; failures are non-fatal and logged as warnings.
    */
@@ -85,7 +87,9 @@ public class BranchManager {
       var refs = git.branchList().call();
       for (var ref : refs) {
         var name = ref.getName().replace("refs/heads/", "");
-        ensureMetadataExists(name, "root");
+        // Use the branch's own name as parent — consistent with the post-checkout hook,
+        // which sets OLD_BRANCH=NEW_BRANCH for master/main (branches that predate this system).
+        ensureMetadataExists(name, name);
       }
     } catch (IOException | GitAPIException e) {
       LOGGER.warn("Failed to initialize branch metadata: {}", e.getMessage());
@@ -134,7 +138,8 @@ public class BranchManager {
 
       // write metadata of the new branch
       var now = LocalDateTime.now();
-      var metadata = new BranchMetadata(name, BranchState.ACTIVE, fromBranch, now, now);
+      var metadata = new BranchMetadata(name, BranchState.ACTIVE, fromBranch, now, now,
+          MaturityLevel.DRAFT);
       metadata.writeTo(metadataPath(name));
       LOGGER.info("Created branch '{}' from '{}'", name, fromBranch);
       return metadata;
@@ -268,7 +273,8 @@ public class BranchManager {
         } else {
           // branch exists in Git but not in Vitruvius metadata, so synthesize defaults.
           var now = LocalDateTime.now();
-          result.add(new BranchMetadata(name, BranchState.ACTIVE, "unknown", now, now));
+          result.add(new BranchMetadata(name, BranchState.ACTIVE, "unknown", now, now,
+              MaturityLevel.DRAFT));
           LOGGER.debug("Branch '{}' has no metadata file, synthesized defaults", name);
         }
       }
@@ -511,6 +517,38 @@ public class BranchManager {
   }
 
   /**
+   * Updates the maturity level of the specified branch and persists the change.
+   *
+   * <p>If no metadata file exists for the branch (e.g. a branch created outside this
+   * manager), the call is a no-op and a warning is logged.
+   *
+   * @param branchName the name of the branch.
+   * @param maturity   the new maturity level, must not be null.
+   *
+   * @throws BranchOperationException if the metadata file cannot be read or written.
+   */
+  public void setBranchMaturity(String branchName, MaturityLevel maturity)
+      throws BranchOperationException {
+    checkNotNull(branchName, "branch name must not be null");
+    checkNotNull(maturity, "maturity must not be null");
+
+    var metadataFile = metadataPath(branchName);
+    if (!Files.exists(metadataFile)) {
+      LOGGER.warn("No metadata file found for branch '{}', skipping maturity update", branchName);
+      return;
+    }
+    try {
+      var metadata = BranchMetadata.readFrom(metadataFile);
+      metadata.setMaturity(maturity);
+      metadata.writeTo(metadataFile);
+      LOGGER.info("Branch '{}' maturity set to {}", branchName, maturity);
+    } catch (IOException e) {
+      throw new BranchOperationException(
+          "Failed to update maturity for branch '" + branchName + "'", e);
+    }
+  }
+
+  /**
    * Creates a metadata file for the given branch if one does not already exist.
    * Used when a branch is first checked out via Git CLI to ensure all branches
    * have consistent Vitruvius metadata regardless of how they were created.
@@ -534,7 +572,8 @@ public class BranchManager {
       Files.createDirectories(metadataFile.getParent());
       LocalDateTime now = LocalDateTime.now();
       BranchMetadata metadata =
-          new BranchMetadata(branchName, BranchState.ACTIVE, parentBranch, now, now);
+          new BranchMetadata(branchName, BranchState.ACTIVE, parentBranch, now, now,
+              MaturityLevel.DRAFT);
       metadata.writeTo(metadataFile);
       LOGGER.info("Created metadata for branch '{}' (parent: '{}')", branchName, parentBranch);
     } catch (IOException e) {

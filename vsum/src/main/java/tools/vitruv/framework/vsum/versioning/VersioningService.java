@@ -29,6 +29,7 @@ import org.eclipse.jgit.treewalk.TreeWalk;
 import org.eclipse.jgit.util.io.DisabledOutputStream;
 import tools.vitruv.framework.vsum.branch.data.BranchMetadata;
 import tools.vitruv.framework.vsum.branch.data.BranchState;
+import tools.vitruv.framework.vsum.branch.data.MaturityLevel;
 import tools.vitruv.framework.vsum.internal.InternalVirtualModel;
 import tools.vitruv.framework.vsum.versioning.data.RollbackPreview;
 import tools.vitruv.framework.vsum.versioning.data.RollbackResult;
@@ -112,7 +113,8 @@ public class VersioningService {
       LocalDateTime createdAt = LocalDateTime.ofInstant(tagger.getWhen().toInstant(), 
               ZoneId.systemDefault());
       VersionMetadata metadata = new VersionMetadata(versionId, commitSha, branch, tagger.getName(),
-              tagger.getEmailAddress(), createdAt, description != null ? description : "");
+              tagger.getEmailAddress(), createdAt, description != null ? description : "",
+              MaturityLevel.DRAFT);
       metadata.writeTo(versionMetadataPath(versionId));
       LOGGER.info("Version metadata written for '{}'", versionId);
       return metadata;
@@ -173,6 +175,36 @@ public class VersioningService {
     } catch (IOException e) {
       throw new VersioningException("Failed to read version metadata for '" 
               + versionId + "': " + e.getMessage(), e);
+    }
+  }
+
+  /**
+   * Updates the maturity level of the specified version and persists the change.
+   *
+   * @param versionId the version identifier, must not be null.
+   * @param maturity  the new maturity level, must not be null.
+   * @return the updated {@link VersionMetadata}.
+   *
+   * @throws VersioningException if the version does not exist or cannot be read or written.
+   */
+  public VersionMetadata setVersionMaturity(String versionId, MaturityLevel maturity)
+          throws VersioningException {
+    checkNotNull(versionId, "version ID must not be null");
+    checkNotNull(maturity, "maturity must not be null");
+
+    Path metadataFile = versionMetadataPath(versionId);
+    if (!Files.exists(metadataFile)) {
+      throw new VersioningException("Version not found: " + versionId);
+    }
+    try {
+      VersionMetadata metadata = VersionMetadata.readFrom(metadataFile);
+      metadata.setMaturity(maturity);
+      metadata.writeTo(metadataFile);
+      LOGGER.info("Version '{}' maturity set to {}", versionId, maturity);
+      return metadata;
+    } catch (IOException e) {
+      throw new VersioningException(
+              "Failed to update maturity for version '" + versionId + "': " + e.getMessage(), e);
     }
   }
 
@@ -353,8 +385,8 @@ public class VersioningService {
       }
 
       LocalDateTime now = LocalDateTime.now();
-      BranchMetadata metadata = new BranchMetadata(branchName, 
-              BranchState.ACTIVE, version.getBranch(), now, now);
+      BranchMetadata metadata = new BranchMetadata(branchName,
+              BranchState.ACTIVE, version.getBranch(), now, now, MaturityLevel.DRAFT);
       metadata.writeTo(repoRoot.resolve(BRANCHES_DIR).resolve(branchName + ".metadata"));
 
       LOGGER.info("Branch '{}' created from version '{}' with V-SUM state from commit {}",
@@ -416,12 +448,22 @@ public class VersioningService {
     }
   }
 
-  private void extractVsumFromCommit(Repository repo, RevCommit commit, 
+  /**
+   * Encodes a Git branch name for use as a single filesystem path segment.
+   * Replaces '/' with '__' so branches like 'feature/auth' map to a single
+   * directory level instead of a subdirectory, keeping all branch vsum paths
+   * at the same depth and preserving relative URI correctness in EMF resources.
+   */
+  private static String encodeBranchForPath(String branchName) {
+    return branchName.replace("/", "__");
+  }
+
+  private void extractVsumFromCommit(Repository repo, RevCommit commit,
                                      String sourceBranch, String targetBranch)
           throws IOException {
     RevTree tree = commit.getTree();
-    String vsumPrefix = VSUM_BASE_DIR + "/" + sourceBranch + "/";
-    Path targetVsumDir = repoRoot.resolve(VSUM_BASE_DIR).resolve(targetBranch);
+    String vsumPrefix = VSUM_BASE_DIR + "/" + encodeBranchForPath(sourceBranch) + "/";
+    Path targetVsumDir = repoRoot.resolve(VSUM_BASE_DIR).resolve(encodeBranchForPath(targetBranch));
     Files.createDirectories(targetVsumDir);
 
     int extracted = 0;

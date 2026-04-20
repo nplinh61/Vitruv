@@ -14,6 +14,7 @@ import java.time.format.DateTimeFormatter;
 import lombok.Getter;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import tools.vitruv.framework.vsum.branch.data.MaturityLevel;
 /**
  * Holds Vitruvius-specific metadata for a single model version (Git annotated tag).
  *
@@ -21,7 +22,9 @@ import org.apache.logging.log4j.Logger;
  * mirroring what Git stores in the annotated tag object but making it queryable
  * without JGit calls.
  *
- * <p>Immutable after construction - versions are permanent records.
+ * <p>All fields except {@code maturity} are immutable after construction.
+ * Maturity can be updated via {@link #setMaturity(MaturityLevel)} to reflect
+ * the user's assessment of a version's readiness over time.
  *
  * <p>Covers DE-6: version ID, timestamp, author, optional description.
  */
@@ -54,9 +57,13 @@ public class VersionMetadata {
   /** Optional human-readable description of what this version represents. */
   private final String description;
 
+  /** Maturity level of this version. Defaults to {@link MaturityLevel#DRAFT} on creation. */
+  private MaturityLevel maturity;
+
   public VersionMetadata(String versionId, String commitSha, String branch,
                        String taggerName, String taggerEmail,
-                       LocalDateTime createdAt, String description) {
+                       LocalDateTime createdAt, String description,
+                       MaturityLevel maturity) {
     this.versionId = checkNotNull(versionId, "version ID must not be null");
     this.commitSha = checkNotNull(commitSha, "commit SHA must not be null");
     this.branch = checkNotNull(branch, "branch must not be null");
@@ -64,6 +71,16 @@ public class VersionMetadata {
     this.taggerEmail = checkNotNull(taggerEmail, "tagger email must not be null");
     this.createdAt = checkNotNull(createdAt, "createdAt must not be null");
     this.description = description != null ? description : "";
+    this.maturity = checkNotNull(maturity, "maturity must not be null");
+  }
+
+  /**
+   * Updates the maturity level of this version.
+   *
+   * @param maturity the new maturity level, must not be null.
+   */
+  public void setMaturity(MaturityLevel maturity) {
+    this.maturity = checkNotNull(maturity, "maturity must not be null");
   }
 
   /**
@@ -81,6 +98,7 @@ public class VersionMetadata {
     json.addProperty("taggerEmail", taggerEmail);
     json.addProperty("createdAt", createdAt.format(TIMESTAMP_FORMAT));
     json.addProperty("description", description);
+    json.addProperty("maturity", maturity.name());
 
     Files.writeString(path, GSON.toJson(json));
     LOGGER.debug("Wrote version metadata to {}", path);
@@ -102,10 +120,13 @@ public class VersionMetadata {
             requireField(json, "createdAt", path), TIMESTAMP_FORMAT);
     String description = json.has("description")
             ? json.get("description").getAsString() : "";
+    MaturityLevel maturity = json.has("maturity") && !json.get("maturity").isJsonNull()
+            ? MaturityLevel.valueOf(json.get("maturity").getAsString())
+            : MaturityLevel.DRAFT;
 
     LOGGER.debug("Read version metadata from {}", path);
     return new VersionMetadata(versionId, commitSha, branch,
-            taggerName, taggerEmail, createdAt, description);
+            taggerName, taggerEmail, createdAt, description, maturity);
   }
 
   private static String requireField(JsonObject json, String key, Path path) {
@@ -124,6 +145,7 @@ public class VersionMetadata {
               + ", tagger='" + taggerName + "'"
               + ", createdAt=" + createdAt
               + ", description='" + description + "'"
+              + ", maturity=" + maturity
               + "}";
   }
 }
