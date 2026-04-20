@@ -270,9 +270,9 @@ public class CommitManager {
         writeSemanticChangelog(git, commitSha, branch, author.getName(), authorDate, revCommit);
       }
 
-      // Write post-commit trigger so VsumPostCommitWatcher generates the changelog.
-      // Only trigger if model files were changed, mirrors the hook behavior.
-      if (hasModelChanges) {
+      // Write post-commit trigger only in CLI mode (no changeBuffer attached).
+      // In REST mode the changelog is written inline above; the watcher does not run.
+      if (hasModelChanges && changeBuffer == null) {
         try {
           triggerFile.createTrigger(commitSha, branch);
           LOGGER.debug("Post-commit trigger written for changelog generation");
@@ -427,6 +427,14 @@ public class CommitManager {
       }
       LOGGER.info("Staged {} changelog file(s) for commit {}",
           writtenFiles.size(), commitSha.substring(0, 7));
+
+      // Auto-commit changelog files so they are bound to this branch and commit.
+      // Without this commit they remain as staged-but-uncommitted changes, which
+      // can bleed onto other branches when the developer switches without committing.
+      git.commit()
+          .setMessage("[vitruvius] changelog for " + commitSha.substring(0, 7))
+          .call();
+      LOGGER.info("Changelog auto-committed for {}", commitSha.substring(0, 7));
 
     } catch (Exception e) {
       LOGGER.warn("Failed to write semantic changelog for commit {} (non-critical): {}",

@@ -46,6 +46,14 @@ public class MergeManager {
 
   private final Path repoRoot;
   private final MergeTriggerFile mergeTriggerFile;
+  private boolean restMode = false;
+
+  /**
+   * Called after every successful merge to reload the V-SUM in-memory state from the
+   * merged working tree. Default is a no-op (CLI mode); set via
+   * {@link #setPostMergeReload(Runnable)} when running inside the REST server.
+   */
+  private Runnable postMergeReload = () -> {};
 
   /**
    * Creates a new MergeManager for the Git repository at the given path.
@@ -59,6 +67,25 @@ public class MergeManager {
     checkArgument(Files.isDirectory(repoRoot.resolve(".git")),
         "No Git repository found at: %s", repoRoot);
     this.mergeTriggerFile = new MergeTriggerFile(repoRoot);
+  }
+
+  /**
+   * Disables writing the merge trigger file. Call this when running inside the REST
+   * server, where {@code VsumMergeWatcher} is not active.
+   */
+  public void suppressTriggerFile() {
+    this.restMode = true;
+  }
+
+  /**
+   * Sets a callback that is invoked after every successful merge to reload the V-SUM
+   * in-memory state from the merged working tree. Pass {@code branchModel::reload}
+   * from the REST server so the merged files are immediately visible through the API.
+   *
+   * @param callback the reload runnable, must not be null.
+   */
+  public void setPostMergeReload(Runnable callback) {
+    this.postMergeReload = checkNotNull(callback, "postMergeReload callback must not be null");
   }
 
   /**
@@ -131,6 +158,7 @@ public class MergeManager {
       if (result.isSuccessful()) {
         markAsMerged(sourceBranch);
         writeMergeTrigger(result, sourceBranch, targetBranch);
+        postMergeReload.run();
         if (deleteAfterMerge) {
           deleteSourceBranch(git, sourceBranch);
         }
@@ -183,7 +211,7 @@ public class MergeManager {
    * @param jgitResult   the raw JGit merge result.
    * @param sourceBranch the branch that was merged in.
    * @param targetBranch the branch that received the merge.
-   * @param repo         the Git repository (unused, reserved for future use).
+   * @param repo         the Git repository, used to resolve HEAD for ALREADY_UP_TO_DATE.
    * @return the translated {@link ModelMergeResult}.
    *
    * @throws IOException if the repository cannot be read.
@@ -192,6 +220,15 @@ public class MergeManager {
       MergeResult jgitResult, String sourceBranch, String targetBranch,
       Repository repo) throws IOException {
     switch (jgitResult.getMergeStatus()) {
+
+      case ALREADY_UP_TO_DATE:
+        {
+        ObjectId head = repo.resolve("HEAD");
+        String sha = head != null ? head.getName() : "";
+        LOGGER.info("Already up to date; treating as fast-forward (HEAD: {})",
+            sha.substring(0, Math.min(7, sha.length())));
+        return ModelMergeResult.fastForward(sourceBranch, targetBranch, sha);
+        }
 
       case FAST_FORWARD:
       case FAST_FORWARD_SQUASHED:
@@ -280,6 +317,10 @@ public class MergeManager {
    */
   private void writeMergeTrigger(
       ModelMergeResult result, String sourceBranch, String targetBranch) {
+    if (restMode) {
+      LOGGER.debug("REST mode — skipping merge trigger file");
+      return;
+    }
     try {
       String sha = result.getMergeCommitSha() != null
           ? result.getMergeCommitSha()
