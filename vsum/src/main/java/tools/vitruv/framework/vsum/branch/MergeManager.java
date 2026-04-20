@@ -193,6 +193,16 @@ public class MergeManager {
       Repository repo) throws IOException {
     switch (jgitResult.getMergeStatus()) {
 
+      case ALREADY_UP_TO_DATE:
+        {
+        // Source branch is fully contained in target — no commits to apply.
+        // Treated as a successful fast-forward so deleteAfterMerge still fires.
+        String sha = repo.resolve("HEAD") != null ? repo.resolve("HEAD").getName() : "";
+        LOGGER.info("Already up to date; treating as fast-forward (HEAD: {})",
+            sha.substring(0, Math.min(7, sha.length())));
+        return ModelMergeResult.fastForward(sourceBranch, targetBranch, sha);
+        }
+
       case FAST_FORWARD:
       case FAST_FORWARD_SQUASHED:
         {

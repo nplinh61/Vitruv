@@ -9,7 +9,6 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import tools.vitruv.change.atomic.EChange;
 import tools.vitruv.change.atomic.eobject.CreateEObject;
 import tools.vitruv.change.atomic.uuid.UuidResolver;
 
@@ -179,7 +178,9 @@ class SemanticChangelogManagerTest {
             when(changeB.getAffectedElement()).thenReturn(elementB);
             when(uuidResolver.hasUuid(elementB)).thenReturn(false);
 
-            Map<String, List<EChange<EObject>>> changes = Map.of("file:///models/A.xmi", List.of(createChange), "file:///models/B.xmi", List.of(changeB)
+            Map<String, List<SemanticChangeBuffer.AnnotatedEChange>> changes = Map.of(
+                "file:///models/A.xmi", List.of(new SemanticChangeBuffer.AnnotatedEChange(createChange, ChangeOrigin.ORIGINAL)),
+                "file:///models/B.xmi", List.of(new SemanticChangeBuffer.AnnotatedEChange(changeB, ChangeOrigin.ORIGINAL))
             );
             // Need to set up the first change too
             when(createChange.getAffectedElement()).thenReturn(element);
@@ -289,11 +290,12 @@ class SemanticChangelogManagerTest {
     }
 
     @SuppressWarnings("unchecked")
-    private Map<String, List<EChange<EObject>>> changesByResource() {
+    private Map<String, List<SemanticChangeBuffer.AnnotatedEChange>> changesByResource() {
         when(createChange.getAffectedElement()).thenReturn(element);
         when(element.eClass()).thenReturn(null);
         when(uuidResolver.hasUuid(element)).thenReturn(false);
-        return Map.of("file:///models/Test.xmi", List.of(createChange));
+        return Map.of("file:///models/Test.xmi",
+            List.of(new SemanticChangeBuffer.AnnotatedEChange(createChange, ChangeOrigin.ORIGINAL)));
     }
 
     private SemanticChangelogManager.ChangelogDocument readDocument() throws IOException {

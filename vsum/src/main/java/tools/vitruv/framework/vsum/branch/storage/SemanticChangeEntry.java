@@ -1,7 +1,9 @@
 package tools.vitruv.framework.vsum.branch.storage;
 
+import com.google.gson.annotations.SerializedName;
 import java.util.Objects;
 import lombok.Getter;
+import tools.vitruv.framework.vsum.branch.data.MaturityLevel;
 
 /**
  * Represents a single atomic model change within a semantic changelog JSON entry.
@@ -125,17 +127,29 @@ public class SemanticChangeEntry {
 
   /**
    * Origin of this change relative to the developer's direct action.
-   * <ul>
-   *   <li>{@code "original"}: directly triggered by the developer (user-initiated change).</li>
-   *   <li>{@code "consequential"}: triggered by a consistency rule / reaction in response to
-   *       an original change.</li>
-   * </ul>
    *
-   * <p>Used during conflict resolution: when two branches modify the same element-feature pair
-   * and one side's change is {@code "original"} while the other is {@code "consequential"},
-   * the original change takes precedence automatically.
+   * <p>ORIGINAL: the developer typed this change directly in an editor.
+   * CONSEQUENTIAL: the Vitruvius engine generated it automatically to keep models consistent.
+   * UNKNOWN: the origin was not recorded (backward compat with old changelog files).
+   *
+   * <p>Used during conflict resolution: if one branch has ORIGINAL and the other has
+   * CONSEQUENTIAL on the same element-feature, the ORIGINAL side wins automatically.
+   *
+   * <p>Design based on Tural Mammadlee's UpdateConflict auto-resolution approach.
+   *
+   * <p>The @SerializedName alternate "changeOrigin" handles old JSON files that stored
+   * this field as a lowercase string (e.g. "original"). Gson reads either key name.
+   * The ChangeOrigin TypeAdapter in SemanticChangelogManager handles lowercase values.
    */
-  private final String changeOrigin;
+  @SerializedName(value = "origin", alternate = {"changeOrigin"})
+  private final ChangeOrigin origin;
+
+  /**
+   * Maturity level of this individual change (delta).
+   * Defaults to {@link MaturityLevel#DRAFT} at recording time.
+   * Can be promoted by the user via {@link tools.vitruv.framework.vsum.branch.storage.SemanticChangelogManager}.
+   */
+  private final MaturityLevel maturity;
 
   /**
    * Zero-based index within the list at which the value was inserted or removed.
@@ -162,7 +176,8 @@ public class SemanticChangeEntry {
     this.containerUuid = builder.containerUuid;
     this.position = builder.position;
     this.hierarchicalId = builder.hierarchicalId;
-    this.changeOrigin = builder.changeOrigin;
+    this.origin = builder.origin != null ? builder.origin : ChangeOrigin.UNKNOWN;
+    this.maturity = builder.maturity != null ? builder.maturity : MaturityLevel.DRAFT;
   }
 
   /**
@@ -201,7 +216,9 @@ public class SemanticChangeEntry {
 
     private String hierarchicalId;
 
-    private String changeOrigin;
+    private ChangeOrigin origin;
+
+    private MaturityLevel maturity;
 
     private Builder() {
     }
@@ -303,11 +320,21 @@ public class SemanticChangeEntry {
     }
 
     /**
-     * Sets the origin of the change: {@code "original"} for developer-initiated changes,
-     * {@code "consequential"} for reaction-triggered consistency changes.
+     * Sets the origin of this change.
+     * Use {@link ChangeOrigin#ORIGINAL} for developer-initiated changes and
+     * {@link ChangeOrigin#CONSEQUENTIAL} for reaction-triggered consistency changes.
+     * Defaults to {@link ChangeOrigin#UNKNOWN} when not set.
      */
-    public Builder changeOrigin(String changeOrigin) {
-      this.changeOrigin = changeOrigin;
+    public Builder origin(ChangeOrigin origin) {
+      this.origin = origin;
+      return this;
+    }
+
+    /**
+     * Sets the maturity level of this change. Defaults to {@link MaturityLevel#DRAFT}.
+     */
+    public Builder maturity(MaturityLevel maturity) {
+      this.maturity = maturity;
       return this;
     }
 
@@ -340,14 +367,15 @@ public class SemanticChangeEntry {
         && Objects.equals(referencedElementUuid, that.referencedElementUuid)
         && Objects.equals(containerUuid, that.containerUuid)
         && Objects.equals(hierarchicalId, that.hierarchicalId)
-        && Objects.equals(changeOrigin, that.changeOrigin);
+        && origin == that.origin
+        && maturity == that.maturity;
   }
 
   @Override
   public int hashCode() {
     return Objects.hash(
         index, changeType, emfType, elementUuid, eClass, feature, from, to,
-        referencedElementUuid, containerUuid, position, hierarchicalId, changeOrigin);
+        referencedElementUuid, containerUuid, position, hierarchicalId, origin, maturity);
   }
 
   @Override
@@ -355,7 +383,8 @@ public class SemanticChangeEntry {
     return "SemanticChangeEntry{"
         + "index=" + index
         + ", changeType=" + changeType
-        + ", changeOrigin='" + changeOrigin + '\''
+        + ", maturity=" + maturity
+        + ", origin=" + origin
         + ", elementUuid='" + elementUuid + '\''
         + ", hierarchicalId='" + hierarchicalId + '\''
         + ", containerUuid='" + containerUuid + '\''

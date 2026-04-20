@@ -87,6 +87,37 @@ class SemanticConflictDetectorTest {
     }
 
     /**
+     * Builds a FileChangeInfo with a single entry that includes an origin tag.
+     * Used to test auto-resolution of ORIGINAL-vs-CONSEQUENTIAL conflicts.
+     */
+    private static SemanticChangelogManager.ChangelogDocument.FileChangeInfo fileChangeWithOrigin(
+            String path, String elementUuid, String feature, SemanticChangeType changeType,
+            String from, String to, String origin) {
+        SemanticChangelogManager.ChangelogDocument.FileChangeInfo info =
+                new SemanticChangelogManager.ChangelogDocument.FileChangeInfo();
+        info.path = path;
+        info.operation = "MODIFIED";
+
+        ChangeEntryJson entry = new ChangeEntryJson();
+        entry.index = 0;
+        entry.changeType = changeType.name();
+        entry.changeDescription = changeType.getDescription();
+        entry.emfType = "Test";
+        entry.elementUuid = elementUuid;
+        entry.feature = feature;
+        entry.from = from;
+        entry.to = to;
+        entry.position = -1;
+        entry.origin = origin;
+
+        String entryJson = GSON.toJson(entry);
+        info.semanticChanges = GSON.fromJson("[" + entryJson + "]",
+                new com.google.gson.reflect.TypeToken<List<tools.vitruv.framework.vsum.branch.storage.SemanticChangeEntry>>() {
+        }.getType());
+        return info;
+    }
+
+    /**
      * Plain POJO for building SemanticChangeEntry-compatible JSON without depending on its builder.
      */
     private static class ChangeEntryJson {
@@ -100,6 +131,7 @@ class SemanticConflictDetectorTest {
         String from;
         String to;
         String referencedElementUuid;
+        String origin;
         int position;
     }
 
@@ -381,6 +413,75 @@ class SemanticConflictDetectorTest {
                 assertFalse(result.hasConflicts());
                 assertTrue(result.getCommitShasOnA().isEmpty(), "no diverging commits on master");
                 assertTrue(result.getCommitShasOnB().isEmpty(), "no diverging commits on feature-x");
+            }
+        }
+    }
+
+
+    @Nested
+    @DisplayName("analyzeBranches - origin-based auto-resolution (Tural Mammadlee's UpdateConflictAnalyzer)")
+    class OriginAutoResolution {
+
+        @Test
+        @DisplayName("auto-resolves to zero unresolved when one side is ORIGINAL and the other is CONSEQUENTIAL")
+        void originalVsConsequentialAutoResolves(@TempDir Path repoDir) throws Exception {
+            try (Git git = initRepo(repoDir)) {
+                git.branchCreate().setName("feature-x").call();
+
+                // master: changed uuid-A.name to "Bar" -- tagged as ORIGINAL (developer's change)
+                String masterSha = commitFile(git, repoDir, "a.xmi", "<A/>", "master changes A.name");
+                String masterShort = masterSha.substring(0, 7);
+                commitChangelog(git, repoDir, "master", masterShort, changelogJson(masterSha,
+                        "master", List.of(fileChangeWithOrigin("a.xmi", "uuid-A", "name",
+                                SemanticChangeType.ATTRIBUTE_CHANGED, "Old", "Bar", "ORIGINAL"))));
+
+                // feature-x: same element and feature, different value -- tagged as CONSEQUENTIAL
+                // (engine-generated side effect; ORIGINAL side should win automatically)
+                git.checkout().setName("feature-x").call();
+                String featureSha = commitFile(git, repoDir, "a.xmi", "<A/>", "feature changes A.name");
+                String featureShort = featureSha.substring(0, 7);
+                commitChangelog(git, repoDir, "feature-x", featureShort, changelogJson(featureSha,
+                        "feature-x", List.of(fileChangeWithOrigin("a.xmi", "uuid-A", "name",
+                                SemanticChangeType.ATTRIBUTE_CHANGED, "Old", "Baz", "CONSEQUENTIAL"))));
+
+                git.checkout().setName("master").call();
+
+                ReplayResult result = new SemanticConflictDetector(repoDir).analyzeBranches("master", "feature-x");
+
+                // The conflict was auto-resolved: ORIGINAL (master) wins over CONSEQUENTIAL (feature-x).
+                // No unresolved conflicts should remain.
+                assertFalse(result.hasConflicts(),
+                        "ORIGINAL-vs-CONSEQUENTIAL conflict must be auto-resolved to zero unresolved");
+            }
+        }
+
+        @Test
+        @DisplayName("keeps conflict unresolved when both sides are ORIGINAL")
+        void bothOriginalRemainsUnresolved(@TempDir Path repoDir) throws Exception {
+            try (Git git = initRepo(repoDir)) {
+                git.branchCreate().setName("feature-x").call();
+
+                // Both branches made developer-level (ORIGINAL) changes to the same feature.
+                // No automatic winner: human must decide.
+                String masterSha = commitFile(git, repoDir, "a.xmi", "<A/>", "master commit");
+                commitChangelog(git, repoDir, "master", masterSha.substring(0, 7),
+                        changelogJson(masterSha, "master", List.of(
+                                fileChangeWithOrigin("a.xmi", "uuid-A", "name",
+                                        SemanticChangeType.ATTRIBUTE_CHANGED, "Old", "Bar", "ORIGINAL"))));
+
+                git.checkout().setName("feature-x").call();
+                String featureSha = commitFile(git, repoDir, "a.xmi", "<A/>", "feature commit");
+                commitChangelog(git, repoDir, "feature-x", featureSha.substring(0, 7),
+                        changelogJson(featureSha, "feature-x", List.of(
+                                fileChangeWithOrigin("a.xmi", "uuid-A", "name",
+                                        SemanticChangeType.ATTRIBUTE_CHANGED, "Old", "Baz", "ORIGINAL"))));
+
+                git.checkout().setName("master").call();
+
+                ReplayResult result = new SemanticConflictDetector(repoDir).analyzeBranches("master", "feature-x");
+
+                assertTrue(result.hasConflicts(), "two ORIGINAL changes on same feature must remain unresolved");
+                assertEquals(1, result.getConflicts().size());
             }
         }
     }

@@ -266,13 +266,18 @@ public class CommitManager {
           authorDate, stagedFiles, hasModelChanges);
 
       // Write semantic changelog if change tracking is attached and model files changed.
+      boolean changelogWritten = false;
       if (hasModelChanges && changeBuffer != null && changeBuffer.hasChanges()) {
         writeSemanticChangelog(git, commitSha, branch, author.getName(), authorDate, revCommit);
+        changelogWritten = true;
       }
 
-      // Write post-commit trigger so VsumPostCommitWatcher generates the changelog.
-      // Only trigger if model files were changed, mirrors the hook behavior.
-      if (hasModelChanges) {
+      // Write post-commit trigger only when running without semantic change tracking
+      // (i.e. CLI git-commit via the Git post-commit hook). When change tracking IS
+      // attached (REST API mode), the changelog is already written inline above and
+      // VsumPostCommitWatcher is not running, so the trigger file would accumulate
+      // and never be deleted.
+      if (hasModelChanges && !changelogWritten && changeBuffer == null) {
         try {
           triggerFile.createTrigger(commitSha, branch);
           LOGGER.debug("Post-commit trigger written for changelog generation");
@@ -395,8 +400,10 @@ public class CommitManager {
       Git git, String commitSha, String branch, String authorName,
       LocalDateTime authorDate, RevCommit revCommit) {
     try {
-      Map<String, List<EChange<EObject>>> changesByResource =
-          changeBuffer.drainChanges();
+      // drainAnnotatedChanges() tags each EChange as ORIGINAL or CONSEQUENTIAL.
+      // This tagging was introduced by Tural Mammadlee's SemanticChangeBuffer redesign.
+      Map<String, List<SemanticChangeBuffer.AnnotatedEChange>> changesByResource =
+          changeBuffer.drainAnnotatedChanges();
 
       if (changesByResource.isEmpty()) {
         LOGGER.debug("No semantic changes to write for commit {}",

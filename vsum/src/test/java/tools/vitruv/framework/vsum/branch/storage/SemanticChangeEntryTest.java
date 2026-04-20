@@ -5,6 +5,8 @@ import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import tools.vitruv.framework.vsum.branch.data.MaturityLevel;
+
 /**
  * Unit tests for {@link SemanticChangeEntry} and its {@link SemanticChangeEntry.Builder}.
  *
@@ -192,6 +194,49 @@ class SemanticChangeEntryTest {
         assertEquals(entry1, entry2, "entries with identical fields must be equal");
         assertNotEquals(entry1, different, "entries with different elementUuid must not be equal");
         assertEquals(entry1.hashCode(), entry2.hashCode(), "equal entries must produce the same hash code");
+    }
+
+    /**
+     * Verifies that {@code maturity} defaults to {@link MaturityLevel#DRAFT} when not set
+     * via the builder, consistent with the convention that all newly recorded changes start
+     * as work-in-progress.
+     */
+    @Test
+    @DisplayName("maturity defaults to DRAFT when not set by the caller")
+    void maturityDefaultsToDraft() {
+        var entry = SemanticChangeEntry.builder()
+                .index(0)
+                .changeType(SemanticChangeType.ELEMENT_CREATED)
+                .emfType("CreateEObject")
+                .build();
+
+        assertEquals(MaturityLevel.DRAFT, entry.getMaturity(),
+                "maturity must default to DRAFT for newly recorded changes");
+    }
+
+    /**
+     * Verifies that an explicitly set maturity value is stored and that two entries
+     * differing only in maturity are not equal.
+     */
+    @Test
+    @DisplayName("Entries differing only in maturity are not equal")
+    void entriesDifferingInMaturityAreNotEqual() {
+        var draft = SemanticChangeEntry.builder()
+                .index(0).changeType(SemanticChangeType.ATTRIBUTE_CHANGED)
+                .emfType("ReplaceSingleValuedEAttribute")
+                .elementUuid("uuid-001").feature("name")
+                .maturity(MaturityLevel.DRAFT)
+                .build();
+
+        var reviewed = SemanticChangeEntry.builder()
+                .index(0).changeType(SemanticChangeType.ATTRIBUTE_CHANGED)
+                .emfType("ReplaceSingleValuedEAttribute")
+                .elementUuid("uuid-001").feature("name")
+                .maturity(MaturityLevel.REVIEWED)
+                .build();
+
+        assertEquals(MaturityLevel.REVIEWED, reviewed.getMaturity());
+        assertNotEquals(draft, reviewed, "entries with different maturity must not be equal");
     }
 
     /**

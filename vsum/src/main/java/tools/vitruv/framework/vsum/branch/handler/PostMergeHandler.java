@@ -297,8 +297,8 @@ public class PostMergeHandler {
     checkNotNull(sourceBranch, "sourceBranch must not be null");
     checkNotNull(targetBranch, "targetBranch must not be null");
 
-    Path sourceVsum = repositoryRoot.resolve(".vitruvius/vsum").resolve(sourceBranch);
-    Path targetVsum = repositoryRoot.resolve(".vitruvius/vsum").resolve(targetBranch);
+    Path sourceVsum = repositoryRoot.resolve(".vitruvius/vsum").resolve(encodeBranchForPath(sourceBranch));
+    Path targetVsum = repositoryRoot.resolve(".vitruvius/vsum").resolve(encodeBranchForPath(targetBranch));
 
     if (!Files.exists(sourceVsum)) {
       LOGGER.warn("Source branch '{}' has no VSUM state to copy", sourceBranch);
@@ -319,6 +319,16 @@ public class PostMergeHandler {
       LOGGER.error("Failed to copy VSUM state from '{}' to '{}': {}",
           sourceBranch, targetBranch, e.getMessage(), e);
     }
+  }
+
+  /**
+   * Encodes a Git branch name for use as a single filesystem path segment.
+   * Replaces '/' with '__' so branch names like 'feature/auth' are stored as
+   * 'feature__auth', keeping all branch vsum directories at the same depth and
+   * preserving relative URI correctness in EMF cross-resource references.
+   */
+  private static String encodeBranchForPath(String branchName) {
+    return branchName.replace("/", "__");
   }
 
   private void copyDirectory(Path source, Path target) throws IOException {

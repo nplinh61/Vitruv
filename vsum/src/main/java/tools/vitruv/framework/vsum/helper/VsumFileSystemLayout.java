@@ -179,9 +179,30 @@ public class VsumFileSystemLayout {
     }
 
     private Path getVsumFolder() {
-        //return vsumProjectFolder.resolve(VSUM_FOLDER_NAME);
-        //Linh:new
-        return vsumProjectFolder.resolve(VSUM_BASE_DIR).resolve(currentBranch);
+        return vsumProjectFolder.resolve(VSUM_BASE_DIR).resolve(encodeBranchForPath(currentBranch));
+    }
+
+    /**
+     * Encodes a Git branch name for use as a single filesystem path segment.
+     *
+     * <p>Git allows '/' in branch names (e.g. {@code feature/auth}). Without encoding,
+     * {@code Path.resolve("feature/auth")} creates a two-level subdirectory
+     * ({@code .vitruvius/vsum/feature/auth/}), while a flat branch like {@code master}
+     * stays at one level ({@code .vitruvius/vsum/master/}). The differing depths shift
+     * the relative {@code ../} count in EMF cross-resource hrefs written to the
+     * correspondence file, making inherited correspondences resolve to wrong paths on
+     * branches whose names contain slashes.
+     *
+     * <p>Replacing '/' with double-underscore keeps the vsum folder exactly one level
+     * below {@code .vitruvius/vsum/} for every branch name, regardless of slashes.
+     * Double-underscore is chosen because single underscore may appear in valid branch
+     * names; double-underscore is extremely uncommon and avoids collisions.
+     *
+     * @param branchName the raw Git branch name.
+     * @return a filesystem-safe name suitable for use as a single path segment.
+     */
+    private static String encodeBranchForPath(String branchName) {
+        return branchName.replace("/", "__");
     }
 
     private Path getConsistencyMetadataFolder() {
@@ -220,7 +241,7 @@ public class VsumFileSystemLayout {
 
         LOGGER.info("Branch '{}' has no vsum state - inheriting from '{}'", currentBranch, sourceBranchName);
 
-        Path sourceVsumFolder = vsumProjectFolder.resolve(VSUM_BASE_DIR).resolve(sourceBranchName);
+        Path sourceVsumFolder = vsumProjectFolder.resolve(VSUM_BASE_DIR).resolve(encodeBranchForPath(sourceBranchName));
         if (!Files.isDirectory(sourceVsumFolder)) {
             LOGGER.debug("Source branch '{}' has no vsum folder - starting fresh", sourceBranchName);
             return;

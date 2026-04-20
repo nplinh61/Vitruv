@@ -4,7 +4,11 @@ import static com.google.common.base.Preconditions.checkNotNull;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonDeserializer;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import com.google.gson.JsonPrimitive;
 import com.google.gson.JsonSerializer;
 import java.io.IOException;
@@ -35,8 +39,12 @@ import tools.vitruv.change.atomic.eobject.CreateEObject;
 import tools.vitruv.change.atomic.eobject.DeleteEObject;
 import tools.vitruv.change.atomic.hid.internal.HierarchicalIdResolver;
 import tools.vitruv.change.atomic.uuid.UuidResolver;
-import tools.vitruv.change.changederivation.persistence.DeltaPersistence;
+import java.util.Collections;
+import org.eclipse.emf.ecore.resource.ResourceSet;
+import org.eclipse.emf.ecore.resource.impl.ResourceSetImpl;
+import org.eclipse.emf.ecore.util.EcoreUtil;
 import tools.vitruv.framework.vsum.branch.data.FileOperation;
+import tools.vitruv.framework.vsum.branch.data.MaturityLevel;
 
 /**
  * Writes and reads semantic changelog files stored under
@@ -110,8 +118,10 @@ public class SemanticChangelogManager {
    * @param authorDate date the changes were authored.
    * @param message commit message.
    * @param parentShas parent commit SHAs (one for normal commits, two for merge commits).
-   * @param changesByResource map of resource URI -> ordered atomic EChanges, from
-   *     {@link SemanticChangeBuffer#drainChanges()}.
+   * @param changesByResource map of resource URI to annotated EChanges, from
+   *     {@link SemanticChangeBuffer#drainAnnotatedChanges()}.
+   *     Each change carries an origin tag (ORIGINAL or CONSEQUENTIAL) that is stored in JSON.
+   *     This tagging was introduced by Tural Mammadlee's SemanticChangeBuffer redesign.
    * @param activeResources all currently loaded EMF Resources; used to locate the resource
    *     objects for XMI snapshot writing. May be null or empty to skip XMI.
    * @param uuidResolver resolver used to convert EObjects to stable UUIDs for JSON output.
@@ -121,7 +131,7 @@ public class SemanticChangelogManager {
   public List<Path> write(
       String commitSha, String branch, String author, LocalDateTime authorDate,
       String message, List<String> parentShas,
-      Map<String, List<EChange<EObject>>> changesByResource,
+      Map<String, List<SemanticChangeBuffer.AnnotatedEChange>> changesByResource,
       Collection<Resource> activeResources, UuidResolver uuidResolver) throws IOException {
 
     checkNotNull(commitSha, "commitSha must not be null");
@@ -175,9 +185,15 @@ public class SemanticChangelogManager {
         String resourceName = deriveResourceName(resourceUri);
         Path xmiFile = xmiDir.resolve(shortSha + "-" + resourceName + ".xmi");
         try {
-          DeltaPersistence.saveResourceAsChanges(resource, xmiFile);
+          // DeltaPersistence was removed from the library in version 3.2.3-SNAPSHOT.
+          // Saving the resource as a plain XMI copy instead (non-critical snapshot only).
+          ResourceSet tempRs = new ResourceSetImpl();
+          Resource xmiResource = tempRs.createResource(
+              URI.createFileURI(xmiFile.toAbsolutePath().toString()));
+          xmiResource.getContents().addAll(EcoreUtil.copyAll(resource.getContents()));
+          xmiResource.save(Collections.emptyMap());
           writtenFiles.add(xmiFile);
-          LOGGER.debug("XMI delta snapshot written: {}", xmiFile.getFileName());
+          LOGGER.debug("XMI snapshot written: {}", xmiFile.getFileName());
         } catch (Exception e) {
           LOGGER.warn("Failed to write XMI snapshot for '{}' (non-critical): {}",
               resourceName, e.getMessage());
@@ -208,10 +224,69 @@ public class SemanticChangelogManager {
     return gson.fromJson(json, ChangelogDocument.class);
   }
 
+  /**
+   * Updates the maturity level of a single {@link SemanticChangeEntry} identified by its
+   * {@code index} within the JSON changelog file for the given branch and short SHA.
+   *
+   * <p>The update is applied directly to the JSON without full deserialization, so all other
+   * fields in the file are preserved exactly. If no entry with the given {@code entryIndex}
+   * exists, an {@link IOException} is thrown.
+   *
+   * @param branch     the branch name used as the directory component.
+   * @param shortSha   the 7-character short SHA used as the file name prefix.
+   * @param entryIndex the {@code index} field of the entry to update.
+   * @param maturity   the new maturity level, must not be null.
+   * @throws IOException if the file does not exist, cannot be read or written,
+   *     or no entry with the given index is found.
+   */
+  public void updateEntryMaturity(String branch, String shortSha,
+      int entryIndex, MaturityLevel maturity) throws IOException {
+    checkNotNull(branch, "branch must not be null");
+    checkNotNull(shortSha, "shortSha must not be null");
+    checkNotNull(maturity, "maturity must not be null");
+
+    Path jsonFile = repositoryRoot.resolve(".vitruvius").resolve("changelogs")
+        .resolve(branch).resolve("json").resolve(shortSha + ".json");
+
+    if (!Files.exists(jsonFile)) {
+      throw new IOException(
+          "Changelog not found for branch '" + branch + "' commit " + shortSha);
+    }
+
+    JsonObject doc = JsonParser.parseString(Files.readString(jsonFile)).getAsJsonObject();
+
+    boolean found = false;
+    JsonArray fileChanges = doc.getAsJsonArray("fileChanges");
+    if (fileChanges != null) {
+      for (JsonElement fc : fileChanges) {
+        JsonArray semanticChanges = fc.getAsJsonObject().getAsJsonArray("semanticChanges");
+        if (semanticChanges == null) {
+          continue;
+        }
+        for (JsonElement sc : semanticChanges) {
+          JsonObject entry = sc.getAsJsonObject();
+          if (entry.has("index") && entry.get("index").getAsInt() == entryIndex) {
+            entry.addProperty("maturity", maturity.name());
+            found = true;
+          }
+        }
+      }
+    }
+
+    if (!found) {
+      throw new IOException(
+          "No entry with index " + entryIndex + " found in changelog " + shortSha);
+    }
+
+    Files.writeString(jsonFile, gson.toJson(doc));
+    LOGGER.info("Updated maturity of entry {} in {} ({}) to {}",
+        entryIndex, shortSha, branch, maturity);
+  }
+
   private ChangelogDocument buildDocument(
       String commitSha, String branch, String author, LocalDateTime authorDate,
       String message, List<String> parentShas,
-      Map<String, List<EChange<EObject>>> changesByResource,
+      Map<String, List<SemanticChangeBuffer.AnnotatedEChange>> changesByResource,
       EChangeToEntryConverter converter) {
     ChangelogDocument doc = new ChangelogDocument();
     doc.formatVersion = FORMAT_VERSION;
@@ -240,12 +315,15 @@ public class SemanticChangelogManager {
     Map<String, DiffEntry> gitDiff = buildGitDiffMap(commitSha);
 
     // One FileChangeInfo per changed resource
-    for (Map.Entry<String, List<EChange<EObject>>> entry : changesByResource.entrySet()) {
+    for (Map.Entry<String, List<SemanticChangeBuffer.AnnotatedEChange>> entry
+        : changesByResource.entrySet()) {
       String resourceUri = entry.getKey();
-      List<EChange<EObject>> eChanges = entry.getValue();
+      List<SemanticChangeBuffer.AnnotatedEChange> annotatedChanges = entry.getValue();
 
-      // Translate raw EChange objects into human-readable SemanticChangeEntry records
-      List<SemanticChangeEntry> entries = converter.convert(eChanges);
+      // drainAnnotatedChanges() returns EChanges tagged as ORIGINAL or CONSEQUENTIAL.
+      // convertAnnotated preserves those origin tags in each SemanticChangeEntry.
+      // This wiring was introduced following Tural Mammadlee's SemanticChangeBuffer redesign.
+      List<SemanticChangeEntry> entries = converter.convertAnnotated(annotatedChanges);
       totalSemantic += entries.size();
 
       // Collect every resolved UUID for the summary's affectedElementUuids list
@@ -259,6 +337,11 @@ public class SemanticChangelogManager {
       DiffEntry diffEntry = gitDiff.get(relPath);
 
       ChangelogDocument.FileChangeInfo fileInfo = new ChangelogDocument.FileChangeInfo();
+
+      // Extract plain EChanges for the file operation detector (origin not needed here).
+      List<EChange<EObject>> eChanges = annotatedChanges.stream()
+          .map(SemanticChangeBuffer.AnnotatedEChange::getChange)
+          .toList();
 
       //detect file operation
       fileInfo.operation = detectOperation(relPath, eChanges, gitDiff).name();
@@ -415,6 +498,20 @@ public class SemanticChangelogManager {
         .registerTypeAdapter(LocalDateTime.class,
             (JsonDeserializer<LocalDateTime>) (json, type, ctx) ->
                 LocalDateTime.parse(json.getAsString(), DATE_FORMATTER))
+        // Backward compat: old JSON stored origin as a lowercase string (e.g. "original").
+        // New JSON stores the enum name (e.g. "ORIGINAL"). Both are handled here.
+        // Missing or unrecognised values map to UNKNOWN.
+        .registerTypeAdapter(ChangeOrigin.class,
+            (JsonDeserializer<ChangeOrigin>) (json, type, ctx) -> {
+              if (json == null || json.isJsonNull()) {
+                return ChangeOrigin.UNKNOWN;
+              }
+              try {
+                return ChangeOrigin.valueOf(json.getAsString().toUpperCase());
+              } catch (IllegalArgumentException e) {
+                return ChangeOrigin.UNKNOWN;
+              }
+            })
         .create();
   }
 

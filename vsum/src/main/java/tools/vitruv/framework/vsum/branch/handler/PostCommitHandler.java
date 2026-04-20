@@ -136,7 +136,10 @@ public class PostCommitHandler {
         parentShas.add(parent.getName());
       }
 
-      Map<String, List<EChange<EObject>>> changesByResource = changeBuffer.drainChanges();
+      // drainAnnotatedChanges() tags each EChange as ORIGINAL or CONSEQUENTIAL.
+      // This tagging was introduced by Tural Mammadlee's SemanticChangeBuffer redesign.
+      Map<String, List<SemanticChangeBuffer.AnnotatedEChange>> changesByResource =
+          changeBuffer.drainAnnotatedChanges();
       Collection<Resource> activeResources = resourceSupplier.get();
 
       List<Path> writtenFiles = changelogManager.write(
