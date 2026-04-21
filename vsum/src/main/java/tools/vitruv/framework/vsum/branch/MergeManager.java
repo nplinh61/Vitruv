@@ -23,6 +23,7 @@ import tools.vitruv.framework.vsum.branch.data.BranchState;
 import tools.vitruv.framework.vsum.branch.data.ModelMergeResult;
 import tools.vitruv.framework.vsum.branch.data.ValidationResult;
 import tools.vitruv.framework.vsum.branch.exception.BranchOperationException;
+import tools.vitruv.framework.vsum.branch.handler.PostMergeHandler;
 import tools.vitruv.framework.vsum.branch.util.MergeResultFile;
 import tools.vitruv.framework.vsum.branch.util.MergeTriggerFile;
 
@@ -56,6 +57,14 @@ public class MergeManager {
   private Runnable postMergeReload = () -> {};
 
   /**
+   * Optional handler that copies the source branch V-SUM state into the target branch
+   * before the reload, so the target V-SUM knows about resources introduced on the source
+   * branch. Null in CLI mode (the watcher handles this); set via
+   * {@link #setPostMergeHandler(PostMergeHandler)} in REST mode.
+   */
+  private PostMergeHandler postMergeHandler;
+
+  /**
    * Creates a new MergeManager for the Git repository at the given path.
    *
    * @param repoRoot the root directory of the Git repository.
@@ -86,6 +95,18 @@ public class MergeManager {
    */
   public void setPostMergeReload(Runnable callback) {
     this.postMergeReload = checkNotNull(callback, "postMergeReload callback must not be null");
+  }
+
+  /**
+   * Sets the handler used to copy the source branch V-SUM state into the target branch
+   * before the post-merge reload. Required in REST mode so that resources introduced
+   * on the source branch (and unknown to the target branch V-SUM) become visible after
+   * the merge. Only called for conflict-free merges (SUCCESS and FAST_FORWARD).
+   *
+   * @param handler the post-merge handler, must not be null.
+   */
+  public void setPostMergeHandler(PostMergeHandler handler) {
+    this.postMergeHandler = checkNotNull(handler, "postMergeHandler must not be null");
   }
 
   /**
@@ -158,6 +179,9 @@ public class MergeManager {
       if (result.isSuccessful()) {
         markAsMerged(sourceBranch);
         writeMergeTrigger(result, sourceBranch, targetBranch);
+        if (postMergeHandler != null) {
+          postMergeHandler.copyVsumFromSourceBranch(sourceBranch, targetBranch);
+        }
         postMergeReload.run();
         if (deleteAfterMerge) {
           deleteSourceBranch(git, sourceBranch);

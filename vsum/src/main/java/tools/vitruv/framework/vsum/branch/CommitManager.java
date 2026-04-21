@@ -241,6 +241,7 @@ public class CommitManager {
       // stage model files
       List<String> stagedFiles = stageModelFiles(git, options);
       stageBranchMetadata(git, branch, stagedFiles);
+      stageVsumState(git, branch, stagedFiles);
 
       Status status = git.status().call();
       if (status.getAdded().isEmpty()
@@ -339,6 +340,7 @@ public class CommitManager {
         LOGGER.debug("Staged additional file: {}", relativePath);
       }
     }
+
     LOGGER.info("Staged {} file(s) for commit", staged.size());
     return staged;
   }
@@ -376,6 +378,43 @@ public class CommitManager {
       // metadata update failing should not block the commit
       LOGGER.warn("Failed to update branch metadata lastModified (non-critical): {}",
           e.getMessage());
+    }
+  }
+
+  /**
+   * Stages all files inside the V-SUM state folder for the current branch
+   * ({@code .vitruvius/vsum/{branch}/}) so that correspondences, uuid.uuid,
+   * and models.models are committed to git alongside model files.
+   * Without this, V-SUM state is only on disk and is lost or incorrectly
+   * inherited when switching branches.
+   *
+   * @param git    the open Git instance.
+   * @param branch the current branch name.
+   * @param staged the accumulating list of staged file paths.
+   */
+  private void stageVsumState(Git git, String branch, List<String> staged) {
+    Path vsumDir = repoRoot.resolve(".vitruvius/vsum").resolve(branch);
+    if (!Files.isDirectory(vsumDir)) {
+      LOGGER.debug("No V-SUM state directory for branch '{}', skipping", branch);
+      return;
+    }
+    try (var stream = Files.walk(vsumDir)) {
+      stream.filter(Files::isRegularFile).forEach(file -> {
+        String relativePath = repoRoot.relativize(file).toString().replace('\\', '/');
+        if (!staged.contains(relativePath)) {
+          try {
+            git.add().addFilepattern(relativePath).call();
+            staged.add(relativePath);
+            LOGGER.debug("Staged V-SUM state file: {}", relativePath);
+          } catch (GitAPIException e) {
+            LOGGER.warn("Failed to stage V-SUM state file '{}' (non-critical): {}",
+                relativePath, e.getMessage());
+          }
+        }
+      });
+      LOGGER.info("Staged V-SUM state for branch '{}'", branch);
+    } catch (IOException e) {
+      LOGGER.warn("Failed to walk V-SUM state directory (non-critical): {}", e.getMessage());
     }
   }
 

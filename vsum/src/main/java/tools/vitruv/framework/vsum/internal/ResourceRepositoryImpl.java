@@ -163,6 +163,8 @@ class ResourceRepositoryImpl implements ModelRepository {
             modelUris =
                     Files.readAllLines(fileSystemLayout.getModelsNamesFilesPath()).stream()
                             .map(URI::createURI)
+                            .filter(uri -> !uri.isFile()
+                                || new java.io.File(uri.toFileString()).exists())
                             .toList();
 
         } catch (NoSuchFileException e) {
