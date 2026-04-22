@@ -10,6 +10,8 @@ import com.google.gson.JsonSerializer;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Optional;
+import java.util.stream.Stream;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -199,13 +201,73 @@ public class SemanticChangelogManager {
     checkNotNull(branch, "branch must not be null");
     checkNotNull(shortSha, "shortSha must not be null");
 
-    Path file = repositoryRoot.resolve(".vitruvius").resolve("changelogs")
-        .resolve(branch).resolve("json").resolve(shortSha + ".json");
-    if (!Files.exists(file)) {
+    Path file = resolveChangelogFile(branch, shortSha);
+    if (file == null) {
       return null;
     }
     String json = Files.readString(file);
     return gson.fromJson(json, ChangelogDocument.class);
+  }
+
+  /**
+   * Returns the raw JSON string of the changelog file as written to disk,
+   * bypassing deserialization and re-serialization. Returns {@code null} if
+   * no changelog file exists for the given branch and short SHA.
+   *
+   * <p>If the file is not found under {@code changelogs/<branch>/json/<sha>.json},
+   * all other branch directories are searched so that changelogs written on a
+   * feature branch remain queryable after a fast-forward merge onto the target branch.
+   */
+  public String readRaw(String branch, String shortSha) throws IOException {
+    checkNotNull(branch, "branch must not be null");
+    checkNotNull(shortSha, "shortSha must not be null");
+
+    Path file = resolveChangelogFile(branch, shortSha);
+    if (file == null) {
+      return null;
+    }
+    return Files.readString(file);
+  }
+
+  /**
+   * Resolves the changelog JSON file for the given branch and short SHA.
+   *
+   * <p>Checks the canonical location first ({@code .vitruvius/changelogs/<branch>/json/<sha>.json}).
+   * If the file is absent (e.g. after a fast-forward merge moves commits from one branch to
+   * another without copying changelog files), falls back to scanning all branch sub-directories
+   * under {@code .vitruvius/changelogs/} for a matching {@code <sha>.json} file.
+   *
+   * @return the resolved {@link Path} of the changelog file, or {@code null} if not found anywhere.
+   */
+  private Path resolveChangelogFile(String branch, String shortSha) throws IOException {
+    String fileName = shortSha + ".json";
+    Path changelogsRoot = repositoryRoot.resolve(".vitruvius").resolve("changelogs");
+
+    // Fast path: canonical location
+    Path canonical = changelogsRoot.resolve(branch).resolve("json").resolve(fileName);
+    if (Files.exists(canonical)) {
+      return canonical;
+    }
+
+    // Fallback: walk all json/ subdirectories under changelogs/ (handles merged commits and
+    // multi-segment branch names like feature/sub/branch whose directories are nested).
+    if (!Files.isDirectory(changelogsRoot)) {
+      return null;
+    }
+    try (Stream<Path> allFiles = Files.walk(changelogsRoot)) {
+      Optional<Path> found = allFiles
+          .filter(p -> p.getFileName().toString().equals(fileName))
+          .filter(p -> p.getParent() != null && p.getParent().getFileName() != null
+              && p.getParent().getFileName().toString().equals("json"))
+          .filter(Files::isRegularFile)
+          .findFirst();
+      if (found.isPresent()) {
+        LOGGER.debug("Changelog for sha '{}' not found under branch '{}', resolved via fallback: {}",
+            shortSha, branch, found.get());
+        return found.get();
+      }
+    }
+    return null;
   }
 
   private ChangelogDocument buildDocument(

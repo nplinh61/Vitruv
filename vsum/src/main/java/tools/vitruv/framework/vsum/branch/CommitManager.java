@@ -78,7 +78,7 @@ public class CommitManager {
    * (Git-only scenarios).
    */
   private SemanticChangeBuffer changeBuffer;
-  private UuidResolver uuidResolver;
+  private Supplier<UuidResolver> uuidResolverSupplier;
 
   /**
    * Supplies the currently loaded EMF Resources at commit time so XMI snapshots can be
@@ -107,7 +107,7 @@ public class CommitManager {
    * are written to JSON and XMI changelog files as part of each {@link #commit} call.
    *
    * @param changeBuffer     the buffer to drain at commit time, must not be null.
-   * @param uuidResolver     the resolver used to convert EObjects to stable UUIDs for
+   * @param uuidResolverSupplier     the resolver used to convert EObjects to stable UUIDs for
    *                         JSON output, must not be null.
    * @param resourceSupplier supplier that returns the currently loaded EMF Resources at
    *                         commit time, used to write XMI delta snapshots. Must not be
@@ -115,10 +115,10 @@ public class CommitManager {
    */
   public void attachSemanticChangeTracking(
       SemanticChangeBuffer changeBuffer,
-      UuidResolver uuidResolver,
+      Supplier<UuidResolver> uuidResolverSupplier,
       Supplier<Collection<Resource>> resourceSupplier) {
     this.changeBuffer = checkNotNull(changeBuffer, "changeBuffer must not be null");
-    this.uuidResolver = checkNotNull(uuidResolver, "uuidResolver must not be null");
+    this.uuidResolverSupplier = checkNotNull(uuidResolverSupplier, "uuidResolverSupplier must not be null");
     this.resourceSupplier =
         checkNotNull(resourceSupplier, "resourceSupplier must not be null");
     LOGGER.info("Semantic change tracking attached to CommitManager");
@@ -197,6 +197,22 @@ public class CommitManager {
     checkNotNull(shortSha, "shortSha must not be null");
     try {
       return changelogManager.read(branch, shortSha);
+    } catch (IOException e) {
+      throw new BranchOperationException(
+          "Failed to read changelog for " + shortSha + ": " + e.getMessage(), e);
+    }
+  }
+
+  /**
+   * Returns the raw JSON string of the changelog file exactly as written to disk.
+   * Returns {@code null} if no changelog exists for the given branch and short SHA.
+   */
+  public String readChangelogRaw(String branch, String shortSha)
+      throws BranchOperationException {
+    checkNotNull(branch, "branch must not be null");
+    checkNotNull(shortSha, "shortSha must not be null");
+    try {
+      return changelogManager.readRaw(branch, shortSha);
     } catch (IOException e) {
       throw new BranchOperationException(
           "Failed to read changelog for " + shortSha + ": " + e.getMessage(), e);
@@ -456,7 +472,7 @@ public class CommitManager {
       List<Path> writtenFiles = changelogManager.write(
           commitSha, branch, authorName, authorDate,
           revCommit.getFullMessage().trim(),
-          parentShas, changesByResource, activeResources, uuidResolver);
+          parentShas, changesByResource, activeResources, uuidResolverSupplier.get());
 
       // Stage all written changelog files (JSON + XMI) so they are tracked by Git
       for (Path file : writtenFiles) {

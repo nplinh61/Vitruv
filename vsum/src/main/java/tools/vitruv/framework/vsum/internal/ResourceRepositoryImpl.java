@@ -25,6 +25,7 @@ import tools.vitruv.framework.vsum.internal.messages.InfoMessages;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
+import java.nio.file.Path;
 import java.util.*;
 import java.util.Map.Entry;
 
@@ -134,8 +135,9 @@ class ResourceRepositoryImpl implements ModelRepository {
         }
         try {
             correspondenceModel.loadSerializedCorrespondences(modelsResourceSet);
+            LOGGER.info("Loaded correspondences from disk successfully");
         } catch (Exception e) {
-            LOGGER.warn("Failed to load correspondences (will rebuild as needed): {}", e.getMessage());
+            LOGGER.warn("Failed to load correspondences (will rebuild as needed): {}", e.getMessage(), e);
         }
         isLoading = false;
 
@@ -149,10 +151,24 @@ class ResourceRepositoryImpl implements ModelRepository {
 
 
     private void writeModelsFile() throws IOException {
+        // Exclude internal V-SUM resources that live under .vitruvius/ — these are framework
+        // artefacts (uuid resolver helpers, cached metadata) that must not be reloaded as user
+        // models on the next startup.  Only the user-visible model files belong in models.models.
+        Path vitruviusDir = fileSystemLayout.getVsumProjectFolder().resolve(".vitruvius");
         Files.write(
                 fileSystemLayout.getModelsNamesFilesPath(),
                 modelsResourceSet.getResources().stream()
                         .map(Resource::getURI)
+                        .filter(uri -> {
+                            if (!uri.isFile()) return true;
+                            Path filePath = Path.of(uri.toFileString());
+                            return !filePath.startsWith(vitruviusDir);
+                        })
+                        // Normalise to file:/// so the URI round-trips identically on reload.
+                        // Without normalisation, Windows file URIs can flip between file:/C:/...
+                        // and file:///C:/..., causing EcoreUtil.resolve() to miss the resource
+                        // in modelsResourceSet and silently drop inherited correspondences.
+                        .map(uri -> uri.isFile() ? URI.createFileURI(uri.toFileString()) : uri)
                         .map(URI::toString)
                         .toList());
     }
@@ -163,6 +179,9 @@ class ResourceRepositoryImpl implements ModelRepository {
             modelUris =
                     Files.readAllLines(fileSystemLayout.getModelsNamesFilesPath()).stream()
                             .map(URI::createURI)
+                            // Normalise to file:/// to match what writeModelsFile writes and
+                            // what EcoreUtil.resolve expects when looking up in modelsResourceSet.
+                            .map(uri -> uri.isFile() ? URI.createFileURI(uri.toFileString()) : uri)
                             .filter(uri -> !uri.isFile()
                                 || new java.io.File(uri.toFileString()).exists())
                             .toList();

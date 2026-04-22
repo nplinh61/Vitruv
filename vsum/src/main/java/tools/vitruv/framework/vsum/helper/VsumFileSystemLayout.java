@@ -8,8 +8,11 @@ import org.eclipse.jgit.lib.Repository;
 
 import java.io.IOException;
 import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import static com.google.common.base.Preconditions.*;
 import static edu.kit.ipd.sdq.commons.util.org.eclipse.emf.common.util.URIUtil.createFileURI;
@@ -247,9 +250,78 @@ public class VsumFileSystemLayout {
                     }
                 });
             }
+            // The copied correspondence file still contains hrefs relative to the SOURCE branch
+            // directory depth.  If the target branch is nested deeper (e.g. feature/sub/branch
+            // vs master), the hrefs resolve to the wrong absolute path and
+            // loadSerializedCorrespondences silently drops all inherited correspondences.
+            // Rebase them so they are relative to the TARGET directory instead.
+            Path targetCorrespondence = targetVsumFolder.resolve(CORRESPONDENCES_FILE);
+            if (Files.exists(targetCorrespondence)) {
+                rebaseCorrespondenceHrefs(sourceVsumFolder, targetVsumFolder, targetCorrespondence);
+            }
             LOGGER.info("Inherited full vsum state from branch '{}'", sourceBranchName);
         } catch (IOException e) {
             LOGGER.warn("Could not inherit vsum state from '{}' - starting fresh: {}", sourceBranchName, e.getMessage());
+        }
+    }
+
+    /**
+     * Rewrites the relative {@code href} cross-references inside a copied correspondence file
+     * so that they are relative to the TARGET branch directory rather than the SOURCE branch
+     * directory.
+     *
+     * <p>EMF serialises cross-resource references as relative paths from the containing resource.
+     * When the correspondence file is copied from one branch to another that sits at a different
+     * directory depth, the relative paths become incorrect and proxy resolution fails silently,
+     * causing inherited correspondences to be discarded.
+     *
+     * @param sourceDir the directory that was the source of the copy (source branch vsum folder).
+     * @param targetDir the directory that is the destination of the copy (target branch vsum folder).
+     * @param correspondenceFile the already-copied correspondence file to rewrite in place.
+     */
+    private void rebaseCorrespondenceHrefs(Path sourceDir, Path targetDir, Path correspondenceFile) {
+        try {
+            String xml = Files.readString(correspondenceFile, StandardCharsets.UTF_8);
+            // Match href="URI#fragment" where URI may be empty (same-document ref) or relative.
+            Pattern pattern = Pattern.compile("href=\"([^\"#]*)(#[^\"]*)?\"");
+            Matcher matcher = pattern.matcher(xml);
+            StringBuffer sb = new StringBuffer();
+            boolean changed = false;
+
+            while (matcher.find()) {
+                String uriPart = matcher.group(1);    // everything before '#'
+                String fragment = matcher.group(2) != null ? matcher.group(2) : "";
+
+                // Only rebase relative hrefs (no scheme like "file:" or "http:").
+                // Empty uriPart means a same-document fragment reference — leave unchanged.
+                if (!uriPart.isEmpty() && !uriPart.contains(":")) {
+                    try {
+                        // Resolve the relative href against the SOURCE directory to get the
+                        // normalised absolute path of the referenced model file.
+                        Path absoluteModel = sourceDir.resolve(uriPart).normalize();
+                        // Re-express that path as relative from the TARGET directory.
+                        Path newRelative = targetDir.relativize(absoluteModel);
+                        String newHref = newRelative.toString().replace('\\', '/') + fragment;
+                        matcher.appendReplacement(sb,
+                            "href=\"" + Matcher.quoteReplacement(newHref) + "\"");
+                        changed = true;
+                    } catch (IllegalArgumentException e) {
+                        // Paths on different roots — keep the original href.
+                        matcher.appendReplacement(sb, Matcher.quoteReplacement(matcher.group(0)));
+                    }
+                } else {
+                    matcher.appendReplacement(sb, Matcher.quoteReplacement(matcher.group(0)));
+                }
+            }
+            matcher.appendTail(sb);
+
+            if (changed) {
+                Files.writeString(correspondenceFile, sb.toString(), StandardCharsets.UTF_8);
+                LOGGER.debug("Rebased correspondence HREFs from source depth '{}' to target depth '{}'",
+                    sourceDir.getNameCount(), targetDir.getNameCount());
+            }
+        } catch (IOException e) {
+            LOGGER.warn("Could not rebase correspondence HREFs (non-critical): {}", e.getMessage());
         }
     }
 
