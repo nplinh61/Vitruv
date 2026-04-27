@@ -37,7 +37,6 @@ import tools.vitruv.change.atomic.eobject.CreateEObject;
 import tools.vitruv.change.atomic.eobject.DeleteEObject;
 import tools.vitruv.change.atomic.hid.internal.HierarchicalIdResolver;
 import tools.vitruv.change.atomic.uuid.UuidResolver;
-import tools.vitruv.change.changederivation.persistence.DeltaPersistence;
 import tools.vitruv.framework.vsum.branch.data.FileOperation;
 
 /**
@@ -161,31 +160,6 @@ public class SemanticChangelogManager {
         jsonFile.getFileName(), document.fileChanges.size(),
         document.summary.totalSemanticChanges);
 
-    // Write XMI delta snapshots for each changed resource (non-fatal on failure)
-    if (activeResources != null && !activeResources.isEmpty()) {
-      Path xmiDir = repositoryRoot.resolve(".vitruvius").resolve("changelogs")
-          .resolve(branch).resolve("xmi");
-      Files.createDirectories(xmiDir);
-
-      for (String resourceUri : changesByResource.keySet()) {
-        Resource resource = findResource(activeResources, resourceUri);
-        if (resource == null) {
-          LOGGER.debug("No loaded resource found for URI '{}', skipping XMI snapshot",
-              resourceUri);
-          continue;
-        }
-        String resourceName = deriveResourceName(resourceUri);
-        Path xmiFile = xmiDir.resolve(shortSha + "-" + resourceName + ".xmi");
-        try {
-          DeltaPersistence.saveResourceAsChanges(resource, xmiFile);
-          writtenFiles.add(xmiFile);
-          LOGGER.debug("XMI delta snapshot written: {}", xmiFile.getFileName());
-        } catch (Exception e) {
-          LOGGER.warn("Failed to write XMI snapshot for '{}' (non-critical): {}",
-              resourceName, e.getMessage());
-        }
-      }
-    }
     return writtenFiles;
   }
 

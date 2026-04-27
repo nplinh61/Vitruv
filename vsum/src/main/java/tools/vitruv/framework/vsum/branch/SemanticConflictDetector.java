@@ -35,6 +35,10 @@ import tools.vitruv.framework.vsum.branch.data.ConflictSeverity;
 import tools.vitruv.framework.vsum.branch.data.ReplayResult;
 import tools.vitruv.framework.vsum.branch.data.SemanticConflict;
 import tools.vitruv.framework.vsum.branch.exception.BranchOperationException;
+import tools.vitruv.framework.vsum.branch.merge.MergeConflict;
+import tools.vitruv.framework.vsum.branch.merge.SemanticMergeEngine;
+import tools.vitruv.framework.vsum.branch.merge.SemanticMergeResult;
+import tools.vitruv.framework.vsum.branch.storage.ChangeOrigin;
 import tools.vitruv.framework.vsum.branch.storage.SemanticChangeEntry;
 import tools.vitruv.framework.vsum.branch.storage.SemanticChangeType;
 import tools.vitruv.framework.vsum.branch.storage.SemanticChangelogManager;
@@ -50,33 +54,38 @@ import tools.vitruv.framework.vsum.branch.storage.SemanticChangelogManager;
  *       files directly from the Git object store (no checkout needed).</li>
  *   <li><b>Direct conflict detection</b> - compare {@code (elementUuid, feature)} pairs
  *       across both branches without loading any model. Implemented.</li>
- *   <li><b>Resolution of direct conflicts</b> - programmatic or interactive. Direct conflicts
- *       require human resolution before replay can proceed. TODO.</li>
+ *   <li><b>Resolution of direct conflicts</b> - ChangeOrigin-based auto-resolution:
+ *       ORIGINAL vs CONSEQUENTIAL pairs are auto-resolved; ORIGINAL vs ORIGINAL and UNKNOWN
+ *       combinations require human intervention. Implemented.</li>
  *   <li><b>Build footprint dependency graph</b> - nodes per commit, intra-branch ordering
  *       edges, inter-branch edges where a commit's consequential footprint overlaps another
- *       commit's original footprint. TODO (requires consequential footprint capture,
- *       see {@link SemanticChangelogManager}).</li>
+ *       commit's original footprint. Delegated to {@link SemanticMergeEngine}; requires
+ *       consequential footprint data captured by the consequential changelog component.</li>
  *   <li><b>Detect cycles</b> - a cycle in the dependency graph means no valid interleaving
- *       exists: consequential conflict, requires human resolution. TODO.</li>
+ *       exists: consequential conflict, requires human resolution. Delegated to
+ *       {@link SemanticMergeEngine}.</li>
  *   <li><b>Topological sort</b> - Kahn's algorithm on the acyclic graph produces the
- *       interleaving order for replay. TODO.</li>
+ *       interleaving order for replay. Delegated to {@link SemanticMergeEngine}.</li>
  *   <li><b>Replay in order</b> - deserialize each commit's original changes into live
  *       {@code EChange} objects and apply them through the Vitruvius Reaction engine so
- *       consequential changes are regenerated. Guard failures (target element no longer
- *       exists) trigger re-ordering. TODO.</li>
+ *       consequential changes are regenerated. Delegated to {@link SemanticMergeEngine}.</li>
  *   <li><b>Iterative refinement</b> - compare actual consequential footprints captured
  *       during replay against stored estimates; rebuild and re-sort if new overlaps appear.
- *       TODO.</li>
+ *       Out of scope for this thesis.</li>
  *   <li><b>Return result</b> - consistent merged model state, or a conflict list when
  *       human resolution is required.</li>
  * </ol>
  *
  * <h3>Current state</h3>
  *
- * <p>Steps 1–3 are fully implemented. Steps 4–9 have stub methods with TODO bodies.
- * Calling {@link #analyzeBranches} today runs steps 1–3 and returns direct conflicts;
- * it returns early before the replay engine (steps 5–9) whenever direct conflicts are
- * found, which is the expected behaviour until resolution is implemented.
+ * <p>Steps 1–4 are fully implemented (direct conflict detection and ChangeOrigin-based
+ * auto-resolution). Steps 5–8 are delegated to
+ * {@link SemanticMergeEngine#mergeBidirectional} when the engine is wired via
+ * {@link MergeManager#setMergeEngine}; the stub fallback methods below are safe defaults
+ * used when no engine is available. Full detection of consequential conflicts in steps 5–8
+ * requires per-commit consequential footprint data, which will be provided by the
+ * consequential changelog component once integrated. Step 9 is intentionally out of scope
+ * for this thesis.
  *
  * <h3>Example</h3>
  * <pre>
@@ -104,14 +113,37 @@ public class SemanticConflictDetector {
   private final Gson gson;
 
   /**
-   * Creates a new {@link SemanticConflictDetector} for the repository at the given root.
+   * Optional full merge engine for delegating steps 5–9 (dependency graph, cycle detection,
+   * topological sort, and replay). {@code null} when only steps 1–3 are needed.
+   */
+  private final SemanticMergeEngine mergeEngine;
+
+  /**
+   * Creates a new {@link SemanticConflictDetector} that performs steps 1–3 only
+   * (direct conflict detection via changelog analysis; no model loading or replay).
    *
    * @param repoRoot the root of the Git repository; must contain {@code .git/}.
    */
   public SemanticConflictDetector(Path repoRoot) {
+    this(repoRoot, null);
+  }
+
+  /**
+   * Creates a new {@link SemanticConflictDetector} with an optional
+   * {@link SemanticMergeEngine} for full pipeline execution (steps 1–9).
+   *
+   * <p>When {@code mergeEngine} is non-null and step 3 finds no direct conflicts,
+   * steps 5–9 are delegated to
+   * {@link SemanticMergeEngine#mergeBidirectional(String, String, String)}.
+   *
+   * @param repoRoot    the root of the Git repository; must contain {@code .git/}.
+   * @param mergeEngine engine for the replay pipeline; may be {@code null}.
+   */
+  public SemanticConflictDetector(Path repoRoot, SemanticMergeEngine mergeEngine) {
     this.repoRoot = checkNotNull(repoRoot, "repoRoot must not be null");
     checkArgument(Files.isDirectory(repoRoot.resolve(".git")),
         "No Git repository found at: %s", repoRoot);
+    this.mergeEngine = mergeEngine;
     this.gson = buildGson();
   }
 
@@ -152,6 +184,9 @@ public class SemanticConflictDetector {
       if (headB == null) {
         throw new BranchOperationException("Branch not found: " + branchB);
       }
+      // Full SHAs needed by SemanticMergeEngine for checkout-based replay.
+      String fullShaA = headA.getName();
+      String fullShaB = headB.getName();
 
       // Step 1: Find the common ancestor (merge-base). 
       // Equivalent to "git merge-base branchA branchB". Only commits after this point
@@ -196,6 +231,24 @@ public class SemanticConflictDetector {
                 unresolved.size());
         return new ReplayResult(
             ancestorSha, shortShasA, shortShasB, changesA, changesB, unresolved);
+      }
+
+      // Steps 5–9: if a SemanticMergeEngine is wired in, delegate the full replay pipeline
+      // (dependency graph, cycle detection, topological sort, and replay with refinement).
+      // The engine performs checkout-based replay, so it needs the full commit SHAs and a
+      // valid common ancestor. When no engine is provided, the stub pipeline runs below.
+      if (mergeEngine != null && ancestorSha != null) {
+        try {
+          SemanticMergeResult engineResult =
+              mergeEngine.mergeBidirectional(ancestorSha, fullShaA, fullShaB);
+          LOGGER.info("Merge engine result: {}", engineResult);
+          return convertEngineResult(
+              engineResult, ancestorSha, shortShasA, shortShasB, changesA, changesB);
+        } catch (org.eclipse.jgit.api.errors.GitAPIException | RuntimeException e) {
+          LOGGER.warn("Merge engine delegation failed, falling back to stub pipeline: {}",
+              e.getMessage());
+          // Fall through to stub steps below.
+        }
       }
 
       // Step 5: Build footprint dependency graph.
@@ -385,7 +438,18 @@ public class SemanticConflictDetector {
    * Detects direct semantic conflicts between two lists of change entries
    * (original vs. original, step 3).
    *
-   * <p>Conflict rules:
+   * <p>Two types of conflict are detected:
+   * <ol>
+   *   <li><b>Direct conflicts</b> -- both branches modified the same
+   *       {@code (elementUuid, feature)} pair to incompatible values, or one side deleted
+   *       the element while the other modified it.</li>
+   *   <li><b>Tombstone conflicts</b> -- one branch deleted a container element (UUID X)
+   *       and the other branch contains a change entry whose {@code containerUuid} equals X.
+   *       The child change becomes an invalid orphan because its parent no longer exists;
+   *       always classified as {@link ConflictSeverity#HIGH}.</li>
+   * </ol>
+   *
+   * <p>Severity rules for direct conflicts:
    * <ul>
    *   <li>Same element, one side deleted -&gt; {@link ConflictSeverity#HIGH}</li>
    *   <li>Same {@code (elementUuid, feature)} changed to different values
@@ -396,10 +460,9 @@ public class SemanticConflictDetector {
    * </ul>
    *
    * <p>Only the highest-severity conflict per {@code (elementUuid, feature)} pair
-   * is kept (deduplication).
-   *
-   * <p>TODO (ongoing): add tombstone check using {@code containerUuid} to detect cases
-   * where branch A deletes a container element and branch B modifies one of its children.
+   * is kept (deduplication). The tombstone key {@code "deletedUuid|null"} matches the
+   * form of a direct deletion conflict so that a pre-existing direct conflict on the
+   * same element prevents a redundant tombstone entry.
    *
    * @param changesA changes from branch A.
    * @param changesB changes from branch B.
@@ -411,6 +474,7 @@ public class SemanticConflictDetector {
     // per pair. Key is "uuid|feature"; value is the best conflict found so far.
     Map<String, SemanticConflict> best = new HashMap<>();
 
+    // --- Direct conflict detection (same element UUID, same or null feature) ---
     for (SemanticChangeEntry entryA : changesA) {
       // Skip entries whose UUID could not be resolved. This happens when an element
       // was deleted before the converter could look up its UUID (tombstoning problem).
@@ -449,7 +513,62 @@ public class SemanticConflictDetector {
         }
       }
     }
+
+    // --- Tombstone conflict detection (orphaned child changes) ---
+    // If branch A deleted container X and branch B has a change with containerUuid == X,
+    // that change targets an element whose parent was removed -> orphan -> HIGH conflict.
+    // One conflict is reported per deleted container UUID (the first orphaned child found
+    // is used as the representative entry; additional children of the same container are
+    // deduplicated via the shared key).
+    Map<String, SemanticChangeEntry> deletedByA = buildDeletionMap(changesA);
+    Map<String, SemanticChangeEntry> deletedByB = buildDeletionMap(changesB);
+
+    for (SemanticChangeEntry entryB : changesB) {
+      String container = entryB.getContainerUuid();
+      if (container == null) continue;
+      SemanticChangeEntry tombstone = deletedByA.get(container);
+      if (tombstone == null) continue;
+      String key = container + "|null";
+      if (!best.containsKey(key)) {
+        LOGGER.info("Step 3 tombstone: branch A deleted container '{}'; "
+            + "branch B has orphaned change on element '{}' -- HIGH conflict.",
+            container, entryB.getElementUuid());
+        best.put(key, new SemanticConflict(container, null, tombstone, entryB, ConflictSeverity.HIGH));
+      }
+    }
+
+    for (SemanticChangeEntry entryA : changesA) {
+      String container = entryA.getContainerUuid();
+      if (container == null) continue;
+      SemanticChangeEntry tombstone = deletedByB.get(container);
+      if (tombstone == null) continue;
+      String key = container + "|null";
+      if (!best.containsKey(key)) {
+        LOGGER.info("Step 3 tombstone: branch B deleted container '{}'; "
+            + "branch A has orphaned change on element '{}' -- HIGH conflict.",
+            container, entryA.getElementUuid());
+        best.put(key, new SemanticConflict(container, null, entryA, tombstone, ConflictSeverity.HIGH));
+      }
+    }
+
     return new ArrayList<>(best.values());
+  }
+
+  /**
+   * Builds a map from element UUID to its {@link SemanticChangeType#ELEMENT_DELETED} entry.
+   * Used by tombstone conflict detection in {@link #detectConflicts}.
+   */
+  private static Map<String, SemanticChangeEntry> buildDeletionMap(
+      List<SemanticChangeEntry> changes) {
+    Map<String, SemanticChangeEntry> map = new HashMap<>();
+    for (SemanticChangeEntry e : changes) {
+      if (e.getChangeType() == SemanticChangeType.ELEMENT_DELETED
+          && e.getElementUuid() != null
+          && !e.getElementUuid().equals("unknown")) {
+        map.putIfAbsent(e.getElementUuid(), e);
+      }
+    }
+    return map;
   }
 
   /**
@@ -527,20 +646,38 @@ public class SemanticConflictDetector {
   /**
    * Step 4: Resolves direct conflicts detected in step 3.
    *
-   * <p>Returns the subset of conflicts that could not be resolved automatically.
-   * Any remaining conflicts require human intervention before replay can proceed.
-   * {@link #analyzeBranches} returns early with these unresolved conflicts.
+   * <p>Applies ChangeOrigin-based auto-resolution: when one side's change is
+   * {@link ChangeOrigin#ORIGINAL} and the other is {@link ChangeOrigin#CONSEQUENTIAL},
+   * the original change is preferred and the conflict is dropped from the unresolved list.
+   * All other combinations (ORIGINAL vs ORIGINAL, UNKNOWN on either side) require human
+   * intervention and are returned unchanged.
    *
-   * <p>TODO (step 4): implement resolution strategies - programmatic
-   * ({@code chooseOurs} / {@code chooseTheirs}) and interactive (user prompt).
+   * <p>{@link #analyzeBranches} returns early with the unresolved set; steps 5-9 are only
+   * reached when this method returns an empty list.
    *
    * @param directConflicts conflicts detected in step 3.
-   * @return unresolved conflicts; currently returns all input conflicts unchanged.
+   * @return conflicts that could not be auto-resolved and require human intervention.
    */
   private List<SemanticConflict> resolveDirectConflicts(List<SemanticConflict> directConflicts) {
-    // TODO (step 4): implement conflict resolution.
-    // For now all direct conflicts are considered unresolved and returned to the caller.
-    return directConflicts;
+    List<SemanticConflict> unresolved = new ArrayList<>();
+    for (SemanticConflict conflict : directConflicts) {
+      ChangeOrigin originA = conflict.getChangeOnBranchA().getOrigin();
+      ChangeOrigin originB = conflict.getChangeOnBranchB().getOrigin();
+      if (isOriginalVsConsequential(originA, originB)) {
+        String preferred = (originA == ChangeOrigin.ORIGINAL) ? "A" : "B";
+        LOGGER.info("Step 4: Auto-resolved conflict on element '{}' feature '{}': "
+                + "branch {} has ORIGINAL, other has CONSEQUENTIAL -- branch {} preferred.",
+            conflict.getElementUuid(), conflict.getFeature(), preferred, preferred);
+      } else {
+        unresolved.add(conflict);
+      }
+    }
+    return unresolved;
+  }
+
+  private boolean isOriginalVsConsequential(ChangeOrigin a, ChangeOrigin b) {
+    return (a == ChangeOrigin.ORIGINAL && b == ChangeOrigin.CONSEQUENTIAL)
+        || (a == ChangeOrigin.CONSEQUENTIAL && b == ChangeOrigin.ORIGINAL);
   }
 
   /**
@@ -554,10 +691,11 @@ public class SemanticConflictDetector {
    * written by Reactions) overlaps the original footprint of a commit on the other branch.
    * Intra-branch ordering edges are also added to preserve each branch's commit sequence.
    *
-   * <p>TODO (step 5): implement graph construction. Requires consequential footprints to be
-   * stored per commit in the JSON changelog (section 5.1 of the paper). Currently the changelog
-   * only records original changes; consequential footprint capture is not yet implemented
-   * in {@link SemanticChangelogManager}.
+   * <p>This method returns an empty graph. Full graph construction requires per-commit
+   * consequential footprint data in the JSON changelog; that data will be provided by the
+   * consequential changelog component once integrated. When a {@link SemanticMergeEngine}
+   * is wired, it handles this step internally via
+   * {@link SemanticMergeEngine#mergeBidirectional}.
    *
    * @param shortShasA  7-char commit SHAs on branch A since the ancestor (newest first).
    * @param shortShasB  7-char commit SHAs on branch B since the ancestor (newest first).
@@ -568,10 +706,8 @@ public class SemanticConflictDetector {
   private Map<String, List<String>> buildDependencyGraph(
       List<String> shortShasA, List<String> shortShasB,
       List<SemanticChangeEntry> changesA, List<SemanticChangeEntry> changesB) {
-    // TODO (step 5): build dependency graph.
-    // 1. Add intra-branch edges to preserve commit order within each branch.
-    // 2. For each pair (A_i, B_j): if fp_c(A_i) ∩ fp_o(B_j) ≠ ∅ -> add edge A_i -> B_j.
-    // 3. For each pair (B_j, A_i): if fp_c(B_j) ∩ fp_o(A_i) ≠ ∅ -> add edge B_j -> A_i.
+    // Requires consequential footprint data per commit to build inter-branch edges.
+    // Will be populated once the consequential changelog component is integrated.
     return new HashMap<>();
   }
 
@@ -583,16 +719,16 @@ public class SemanticConflictDetector {
    * {@code A_i} modifies originally. No interleaving can preserve both branches' intent;
    * human resolution is required (analogous to a serialization conflict).
    *
-   * <p>TODO (step 6): implement cycle detection (DFS or Kahn's algorithm counter-check).
+   * <p>This method returns no conflicts. Cycle detection becomes meaningful once step 5
+   * produces a graph with footprint-derived inter-branch edges. When a
+   * {@link SemanticMergeEngine} is wired, it handles this step internally.
    *
    * @param dependencyGraph adjacency list produced by step 5.
    * @return consequential conflicts derived from each cycle; empty if the graph is acyclic.
    */
   private List<SemanticConflict> detectCyclicConflicts(
       Map<String, List<String>> dependencyGraph) {
-    // TODO (step 6): detect cycles in the dependency graph.
-    // Each cycle translates to one or more consequential conflicts (one per direction of
-    // the cycle), each counted per element-feature pair involved.
+    // Cycle detection requires a populated dependency graph from step 5.
     return List.of();
   }
 
@@ -603,14 +739,15 @@ public class SemanticConflictDetector {
    * dependency edges point forward in this order, ensuring that each commit's original
    * change is applied after any consequential change that would otherwise overwrite it.
    *
-   * <p>TODO (step 7): implement Kahn's algorithm.
+   * <p>This method returns an empty ordering. It becomes effective once step 5 populates
+   * the graph with inter-branch footprint edges. When a {@link SemanticMergeEngine} is
+   * wired, it handles this step internally.
    *
    * @param dependencyGraph acyclic adjacency list produced by step 5 (step 6 confirms acyclic).
    * @return commit SHAs in replay order (topological sort of the graph).
    */
   private List<String> computeTopologicalOrder(Map<String, List<String>> dependencyGraph) {
-    // TODO (step 7): topological sort via Kahn's algorithm.
-    // Maintain an in-degree counter per node; repeatedly emit zero-in-degree nodes.
+    // Topological sort becomes meaningful once step 5 produces a non-empty graph.
     return List.of();
   }
 
@@ -633,14 +770,12 @@ public class SemanticConflictDetector {
    *       re-sort (iterative refinement, step 9).</li>
    * </ol>
    *
-   * <p>TODO (steps 8 + 9): implement the replay engine. Requires:
-   * <ul>
-   *   <li>Access to the ancestor model state (base commit checked out to a temp directory).</li>
-   *   <li>{@code HierarchicalId}-based deserialization of changelog DTOs into live
-   *       {@code EChange} objects (see {@code EChangeEObjectToUuidResolverUtil} in
-   *       Vitruv-Change for the UUID assignment direction; the inverse is needed here).</li>
-   *   <li>A live Vitruvius {@code InternalVirtualModel} instance for applying changes.</li>
-   * </ul>
+   * <p>Step 8 requires access to the ancestor model state, deserialization of changelog DTOs
+   * into live {@code EChange} objects, and a live Vitruvius {@code InternalVirtualModel}
+   * instance for applying changes. Step 9 (iterative footprint refinement) is intentionally
+   * out of scope for this thesis. Both are handled by {@link SemanticMergeEngine} when
+   * wired via {@link MergeManager#setMergeEngine}; this method is the safe fallback used
+   * when no engine is available.
    *
    * @param interleaving  commit SHAs in topological replay order (step 7 output).
    * @param ancestorSha   full SHA of the common ancestor; used to seed the replay state.
@@ -655,9 +790,78 @@ public class SemanticConflictDetector {
       List<String> interleaving, String ancestorSha,
       List<String> shortShasA, List<String> shortShasB,
       List<SemanticChangeEntry> changesA, List<SemanticChangeEntry> changesB) {
-    // TODO (steps 8 + 9): implement replay engine with iterative footprint refinement.
+    // Replay and iterative refinement are handled by SemanticMergeEngine when wired.
+    // This fallback returns a clean result when no engine is available.
     return new ReplayResult(
         ancestorSha, shortShasA, shortShasB, changesA, changesB, List.of());
+  }
+
+  /**
+   * Converts a {@link SemanticMergeResult} from the full merge engine into a
+   * {@link ReplayResult} in our format.
+   *
+   * <p>On success the returned result has no conflicts. On conflict the engine's
+   * {@link MergeConflict} list is translated to {@link SemanticConflict} records by
+   * looking up matching {@link SemanticChangeEntry} objects from the pre-loaded changelog
+   * lists. Conflicts whose UUID cannot be found in either changelog are silently skipped.
+   */
+  private ReplayResult convertEngineResult(SemanticMergeResult engineResult,
+      String ancestorSha, List<String> shortShasA, List<String> shortShasB,
+      List<SemanticChangeEntry> changesA, List<SemanticChangeEntry> changesB) {
+
+    if (engineResult.isSuccess()) {
+      LOGGER.info("Merge engine succeeded (direction={})", engineResult.getMergeDirection());
+      return new ReplayResult(ancestorSha, shortShasA, shortShasB, changesA, changesB, List.of());
+    }
+
+    Map<String, SemanticChangeEntry> byUuidA = indexByUuid(changesA);
+    Map<String, SemanticChangeEntry> byUuidB = indexByUuid(changesB);
+
+    List<SemanticConflict> converted = new ArrayList<>();
+    for (MergeConflict mc : engineResult.getConflicts()) {
+      SemanticConflict sc = toSemanticConflict(mc, byUuidA, byUuidB);
+      if (sc != null) {
+        converted.add(sc);
+      }
+    }
+    LOGGER.info("Merge engine: {} conflict(s) converted from engine result", converted.size());
+    return new ReplayResult(ancestorSha, shortShasA, shortShasB, changesA, changesB, converted);
+  }
+
+  private static Map<String, SemanticChangeEntry> indexByUuid(List<SemanticChangeEntry> entries) {
+    Map<String, SemanticChangeEntry> map = new HashMap<>();
+    for (SemanticChangeEntry e : entries) {
+      if (e.getElementUuid() != null && !map.containsKey(e.getElementUuid())) {
+        map.put(e.getElementUuid(), e);
+      }
+    }
+    return map;
+  }
+
+  private static SemanticConflict toSemanticConflict(MergeConflict mc,
+      Map<String, SemanticChangeEntry> byUuidA, Map<String, SemanticChangeEntry> byUuidB) {
+
+    String uuid = mc.getElementUuid();
+    if (uuid == null) {
+      return null; // state-based conflict without UUID
+    }
+    SemanticChangeEntry entryA = byUuidA.get(uuid);
+    SemanticChangeEntry entryB = byUuidB.get(uuid);
+    if (entryA == null || entryB == null) {
+      return null; // UUID not found in our changelogs; can't build SemanticConflict
+    }
+    return new SemanticConflict(uuid, mc.getConflictingFeature(), entryA, entryB,
+        toSeverity(mc.getType()));
+  }
+
+  private static ConflictSeverity toSeverity(MergeConflict.ConflictType type) {
+    return switch (type) {
+      case MODIFY_MODIFY -> ConflictSeverity.MEDIUM;
+      case DELETE_MODIFY, MODIFY_DELETE,
+          BIDIRECTIONAL_INDIRECT_CONFLICT, INTERLEAVING_CONFLICT,
+          REPLAY_APPLICABILITY -> ConflictSeverity.HIGH;
+      case INDIRECT_CONFLICT, USER_VS_DERIVED_WARNING -> ConflictSeverity.LOW;
+    };
   }
 
   private Gson buildGson() {

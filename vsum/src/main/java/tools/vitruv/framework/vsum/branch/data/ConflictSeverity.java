@@ -21,6 +21,20 @@ public enum ConflictSeverity {
   /** Same scalar attribute or single-valued reference changed to different values. */
   MEDIUM,
 
-  /** Delete-vs-modify or incompatible reference change; highest resolution priority. */
-  HIGH
+  /** Delete-vs-modify or incompatible reference change; requires explicit decision. */
+  HIGH,
+
+  /** Deletion that would destroy 10 or more updates; escalation required. */
+  CRITICAL;
+
+  /**
+   * Derives a severity level from the number of updates that would be lost by accepting
+   * a deletion conflict.
+   */
+  public static ConflictSeverity fromLostUpdateCount(int lostUpdates) {
+    if (lostUpdates >= 10) return CRITICAL;
+    if (lostUpdates >= 3)  return HIGH;
+    if (lostUpdates >= 1)  return MEDIUM;
+    return LOW;
+  }
 }

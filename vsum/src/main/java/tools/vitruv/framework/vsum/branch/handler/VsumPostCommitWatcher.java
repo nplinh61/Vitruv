@@ -71,16 +71,16 @@ public class VsumPostCommitWatcher {
    * <p>Must be called before the first commit to ensure no changes are missed.
    * Calling after {@link #start()} is safe but may miss the first trigger.
    *
-   * @param changeBuffer     buffer that accumulated EChanges since the last drain, must not
-   *                         be null.
-   * @param uuidResolver     resolver used to convert EObjects to stable UUIDs, must not be
-   *                         null.
-   * @param resourceSupplier supplier that returns the currently loaded EMF resources, must
-   *                         not be null.
+   * @param changeBuffer         buffer that accumulated EChanges since the last drain, must not
+   *                             be null.
+   * @param uuidResolverSupplier supplier for the UUID resolver; called fresh on each trigger so
+   *                             post-reload resolver instances are always used, must not be null.
+   * @param resourceSupplier     supplier that returns the currently loaded EMF resources, must
+   *                             not be null.
    */
   public void attachSemanticChangeTracking(SemanticChangeBuffer changeBuffer,
-      UuidResolver uuidResolver, Supplier<Collection<Resource>> resourceSupplier) {
-    handler.attachSemanticChangeTracking(changeBuffer, uuidResolver, resourceSupplier);
+      Supplier<UuidResolver> uuidResolverSupplier, Supplier<Collection<Resource>> resourceSupplier) {
+    handler.attachSemanticChangeTracking(changeBuffer, uuidResolverSupplier, resourceSupplier);
   }
 
   /**

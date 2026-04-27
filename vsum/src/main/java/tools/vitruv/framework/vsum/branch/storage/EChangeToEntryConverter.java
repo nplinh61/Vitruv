@@ -400,8 +400,13 @@ public class EChangeToEntryConverter {
       if (uuidResolver.hasUuid(element)) {
         return uuidResolver.getUuid(element).toString();
       }
-      LOGGER.warn("No UUID registered for element of type '{}', using 'unknown'",
-          element.eClass().getName());
+      String eClassName = element.eClass() != null ? element.eClass().getName() : "null";
+      boolean isProxy = element.eIsProxy();
+      String resourceUri = element.eResource() != null
+          ? element.eResource().getURI().toString() : "NO_RESOURCE";
+      LOGGER.warn(
+          "No UUID for element type='{}' isProxy={} resource='{}' identity={}",
+          eClassName, isProxy, resourceUri, System.identityHashCode(element));
       return "unknown";
     } catch (Exception e) {
       LOGGER.warn("UUID resolution failed for element of type '{}': {}",

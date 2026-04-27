@@ -54,7 +54,6 @@ if [ "$HAS_MODEL_CHANGES" = false ]; then
     exit 0
 fi
 
-COMMIT_SHA=$(git rev-parse HEAD)
 BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null || echo "detached-HEAD")
 VITRUVIUS_DIR="$REPO_ROOT/.vitruvius"
 mkdir -p "$VITRUVIUS_DIR"
@@ -65,15 +64,17 @@ AMEND_GUARD="$VITRUVIUS_DIR/.amend-in-progress"
 
 if [ -f "$AMEND_GUARD" ]; then
     rm -f "$AMEND_GUARD"
-else
-    if [ -d "$VSUM_DIR" ]; then
-        touch "$AMEND_GUARD"
-        git add "$VSUM_DIR"
-        git commit --amend --no-edit --no-verify
-        echo "Vitruvius: VSUM state for branch '$BRANCH' committed"
-    fi
+    exit 0  # amend-loop invocation; trigger is written by the original invocation below
+fi
+if [ -d "$VSUM_DIR" ]; then
+    touch "$AMEND_GUARD"
+    git add "$VSUM_DIR"
+    git commit --amend --no-edit --no-verify
+    echo "Vitruvius: VSUM state for branch '$BRANCH' committed"
 fi
 
+# Capture HEAD after the amend so the trigger SHA matches the actual commit in history.
+COMMIT_SHA=$(git rev-parse HEAD)
 TIMESTAMP=$(date +%s)
 
 REQUEST_ID=$(generate_uuid)

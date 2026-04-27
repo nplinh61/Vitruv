@@ -31,16 +31,35 @@ import tools.vitruv.change.composite.propagation.ChangePropagationListener;
  *
  * <p>Only {@link PropagatedChange#getOriginalChange()} is collected.  Consequential changes
  * (reactions / consistency preservation) are intentionally omitted: they can be re-derived
- * by replaying the original atomic changes through Vitruvius, so storing them would be redundant
+ * by replaying the original atomic changes through Vitruvius, so storing them would be redundant.
  *
  * <p>Thread-safety: all public methods and the listener callbacks are {@code synchronized} on
  * {@code this}.  {@link #finishedChangePropagation} is called from the VSUM/model thread while
- * {@link #drainChanges}, {@link #hasChanges}, and {@link #size} may be called from a background
- * watcher thread (e.g. {@code VsumPostCommitWatcher}).
+ * {@link #drainChanges}, {@link #drainAnnotatedChanges}, {@link #hasChanges}, and {@link #size}
+ * may be called from a background watcher thread (e.g. {@code VsumPostCommitWatcher}).
  */
 public class SemanticChangeBuffer implements ChangePropagationListener {
 
   private static final Logger LOGGER = LogManager.getLogger(SemanticChangeBuffer.class);
+
+  /**
+   * An EChange paired with its detected origin. Since this buffer stores only original
+   * changes per the thesis contract, the origin is always {@link ChangeOrigin#ORIGINAL}.
+   * The wrapper exists to provide a compatible interface for consumers that also handle
+   * consequential changes (e.g. Tural's conflict resolution layer).
+   */
+  public static class AnnotatedEChange {
+    private final EChange<EObject> change;
+    private final ChangeOrigin origin;
+
+    public AnnotatedEChange(EChange<EObject> change, ChangeOrigin origin) {
+      this.change = change;
+      this.origin = origin;
+    }
+
+    public EChange<EObject> getChange() { return change; }
+    public ChangeOrigin getOrigin() { return origin; }
+  }
 
   /**
    * Accumulated changes, keyed by the string form of the resource URI.
@@ -116,6 +135,31 @@ public class SemanticChangeBuffer implements ChangePropagationListener {
     int drained = totalChanges;
     totalChanges = 0;
     LOGGER.info("Drained {} atomic change(s) from buffer for {} resource(s)",
+        drained, snapshot.size());
+    return Collections.unmodifiableMap(snapshot);
+  }
+
+  /**
+   * Returns an origin-annotated snapshot of the buffer and clears it. Since this buffer
+   * stores only original changes, every entry carries {@link ChangeOrigin#ORIGINAL}.
+   * This method exists to provide a compatible interface for consumers that distinguish
+   * original from consequential changes.
+   *
+   * @return immutable map of resource URI to ordered annotated changes.
+   */
+  public synchronized Map<String, List<AnnotatedEChange>> drainAnnotatedChanges() {
+    Map<String, List<AnnotatedEChange>> snapshot = new LinkedHashMap<>();
+    changesByResource.forEach((uri, changes) -> {
+      List<AnnotatedEChange> annotated = new ArrayList<>();
+      for (EChange<EObject> change : changes) {
+        annotated.add(new AnnotatedEChange(change, ChangeOrigin.ORIGINAL));
+      }
+      snapshot.put(uri, Collections.unmodifiableList(annotated));
+    });
+    changesByResource.clear();
+    int drained = totalChanges;
+    totalChanges = 0;
+    LOGGER.info("Drained {} annotated change(s) from buffer for {} resource(s)",
         drained, snapshot.size());
     return Collections.unmodifiableMap(snapshot);
   }

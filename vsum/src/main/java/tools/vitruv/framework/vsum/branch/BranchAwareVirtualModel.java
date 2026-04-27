@@ -158,6 +158,17 @@ public class BranchAwareVirtualModel implements InternalVirtualModel {
       // If the branch already has its own state, this is a no-op.
       newLayout.inheritFromBranchIfEmpty(oldBranch);
 
+      // Discard any buffered EChanges that reference pre-reload EObject instances.
+      // Resource.unload() in reload() detaches EObjects (eResource() → null), making
+      // those instances unresolvable in the new UUID resolver. Draining here is safe
+      // because the post-commit watcher for the previous branch's commit has already
+      // committed that changelog before this switch is triggered.
+      if (changeBuffer.hasChanges()) {
+        LOGGER.warn("Discarding {} stale change(s) before branch switch '{}' -> '{}' "
+            + "(pre-reload epoch)", changeBuffer.size(), oldBranch, newBranch);
+        changeBuffer.drainChanges();
+      }
+
       // Reload in place: VirtualModelImpl unloads all current branch resources,
       // resets the UUID resolver, recreates the correspondence model pointing to the
       // target branch's file, and reloads from disk.
@@ -224,6 +235,14 @@ public class BranchAwareVirtualModel implements InternalVirtualModel {
    */
   @Override
   public void reload(VsumFileSystemLayout newLayout) {
+    // Discard stale EChange references before reload() unloads resources and detaches EObjects.
+    // The watcher path (PostCheckoutHandler → this method) bypasses switchBranch(), so the
+    // drain must live here too.
+    if (changeBuffer.hasChanges()) {
+      LOGGER.warn("Discarding {} stale change(s) before layout reload (pre-reload epoch)",
+          changeBuffer.size());
+      changeBuffer.drainChanges();
+    }
     activeModel.reload(newLayout);
     this.activeBranchName = newLayout.getCurrentBranch();
   }

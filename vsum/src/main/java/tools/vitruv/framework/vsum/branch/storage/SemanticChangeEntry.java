@@ -166,6 +166,17 @@ public class SemanticChangeEntry {
   }
 
   /**
+   * Returns the change origin as a typed enum. Parses the stored String field so that
+   * consumers expecting a {@link ChangeOrigin} value (e.g. conflict resolution logic)
+   * can use this without requiring a field type change.
+   */
+  public ChangeOrigin getOrigin() {
+    if ("consequential".equalsIgnoreCase(changeOrigin)) return ChangeOrigin.CONSEQUENTIAL;
+    if ("original".equalsIgnoreCase(changeOrigin)) return ChangeOrigin.ORIGINAL;
+    return ChangeOrigin.UNKNOWN;
+  }
+
+  /**
    * Returns a new {@link Builder} for constructing a {@link SemanticChangeEntry}.
    */
   public static Builder builder() {

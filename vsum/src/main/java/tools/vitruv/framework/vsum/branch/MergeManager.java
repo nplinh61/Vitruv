@@ -21,9 +21,11 @@ import org.eclipse.jgit.merge.MergeStrategy;
 import tools.vitruv.framework.vsum.branch.data.BranchMetadata;
 import tools.vitruv.framework.vsum.branch.data.BranchState;
 import tools.vitruv.framework.vsum.branch.data.ModelMergeResult;
+import tools.vitruv.framework.vsum.branch.data.ReplayResult;
 import tools.vitruv.framework.vsum.branch.data.ValidationResult;
 import tools.vitruv.framework.vsum.branch.exception.BranchOperationException;
 import tools.vitruv.framework.vsum.branch.handler.PostMergeHandler;
+import tools.vitruv.framework.vsum.branch.merge.SemanticMergeEngine;
 import tools.vitruv.framework.vsum.branch.util.MergeResultFile;
 import tools.vitruv.framework.vsum.branch.util.MergeTriggerFile;
 
@@ -63,6 +65,13 @@ public class MergeManager {
    * {@link #setPostMergeHandler(PostMergeHandler)} in REST mode.
    */
   private PostMergeHandler postMergeHandler;
+
+  /**
+   * Optional merge engine for steps 5-9 of the replay pipeline. {@code null} means only
+   * steps 1-3 (direct conflict detection) are performed in the semantic pre-check.
+   * Set via {@link #setMergeEngine(SemanticMergeEngine)} before calling {@link #merge}.
+   */
+  private SemanticMergeEngine mergeEngine;
 
   /**
    * Creates a new MergeManager for the Git repository at the given path.
@@ -107,6 +116,17 @@ public class MergeManager {
    */
   public void setPostMergeHandler(PostMergeHandler handler) {
     this.postMergeHandler = checkNotNull(handler, "postMergeHandler must not be null");
+  }
+
+  /**
+   * Attaches a {@link SemanticMergeEngine} so that steps 5-9 of the replay pipeline run
+   * during the semantic pre-check when no direct conflicts are found. Optional: when not
+   * set, the pre-check performs steps 1-3 only (direct conflict detection).
+   *
+   * @param engine the merge engine to use; must not be null.
+   */
+  public void setMergeEngine(SemanticMergeEngine engine) {
+    this.mergeEngine = checkNotNull(engine, "mergeEngine must not be null");
   }
 
   /**
@@ -161,6 +181,17 @@ public class MergeManager {
             "Cannot merge a branch into itself: " + sourceBranch);
       }
 
+      // Semantic pre-check (MG-2, MG-3): detect direct element-level conflicts before
+      // attempting the JGit merge. If semantic conflicts are found, the merge is blocked
+      // so the developer can resolve them before the files are touched.
+      List<String> semanticConflicts = runSemanticPreCheck(sourceBranch, targetBranch);
+      if (!semanticConflicts.isEmpty()) {
+        LOGGER.warn(
+            "Semantic pre-check detected {} conflict(s) — blocking merge of '{}' into '{}'",
+            semanticConflicts.size(), sourceBranch, targetBranch);
+        return ModelMergeResult.conflicting(sourceBranch, targetBranch, semanticConflicts);
+      }
+
       MergeResult jgitResult = git.merge()
           .include(sourceRef)
           .setStrategy(MergeStrategy.RECURSIVE)
@@ -194,6 +225,37 @@ public class MergeManager {
     } catch (IOException e) {
       throw new BranchOperationException(
           "Failed to open repository: " + e.getMessage(), e);
+    }
+  }
+
+  /**
+   * Runs the semantic conflict pre-check for the proposed merge.
+   *
+   * <p>Creates a lightweight {@link SemanticConflictDetector} (steps 1–3 only) and
+   * compares the semantic changelogs of both branches. Returns a list of conflict
+   * descriptors in the form {@code "semantic://elementUuid/feature"} for each detected
+   * direct conflict. Returns an empty list if no conflicts are found or if the check
+   * cannot be performed (e.g. no changelogs exist yet).
+   *
+   * @param sourceBranch the branch being merged in.
+   * @param targetBranch the branch receiving the merge.
+   * @return conflict descriptors, or an empty list when the merge may proceed.
+   */
+  private List<String> runSemanticPreCheck(String sourceBranch, String targetBranch) {
+    try {
+      SemanticConflictDetector detector = new SemanticConflictDetector(repoRoot, mergeEngine);
+      ReplayResult analysis = detector.analyzeBranches(targetBranch, sourceBranch);
+      if (!analysis.hasConflicts()) {
+        return List.of();
+      }
+      return analysis.getConflicts().stream()
+          .map(c -> "semantic://" + c.getElementUuid() + "/"
+              + (c.getFeature() != null ? c.getFeature() : "lifecycle"))
+          .distinct()
+          .toList();
+    } catch (BranchOperationException e) {
+      LOGGER.debug("Semantic pre-check skipped (non-fatal): {}", e.getMessage());
+      return List.of();
     }
   }
 

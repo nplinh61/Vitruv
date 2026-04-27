@@ -41,7 +41,7 @@ class ResourceRepositoryImpl implements ModelRepository {
     //Linh:new
     private PersistableCorrespondenceModel correspondenceModel;
 
-    private UuidResolver uuidResolver = UuidResolver.create(modelsResourceSet);
+    private volatile UuidResolver uuidResolver = UuidResolver.create(modelsResourceSet);
     private final ChangeRecorder changeRecorder = new ChangeRecorder(modelsResourceSet);
     private VitruviusChangeResolver<Uuid> changeResolver =
             VitruviusChangeResolverFactory.forUuids(uuidResolver);
