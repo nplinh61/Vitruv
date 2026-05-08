@@ -102,6 +102,7 @@ class SemanticConflictDetectorTest {
         String to;
         String referencedElementUuid;
         String containerUuid;
+        java.util.List<String> cascadeDeletedUuids;
         int position;
         String changeOrigin;
     }
@@ -154,6 +155,32 @@ class SemanticConflictDetectorTest {
         entry.to = to;
         entry.position = -1;
         entry.containerUuid = containerUuid;
+
+        SemanticChangelogManager.ChangelogDocument.FileChangeInfo info =
+                new SemanticChangelogManager.ChangelogDocument.FileChangeInfo();
+        info.path = path;
+        info.operation = "MODIFIED";
+        String entryJson = GSON.toJson(entry);
+        info.semanticChanges = GSON.fromJson("[" + entryJson + "]",
+                new com.google.gson.reflect.TypeToken<List<tools.vitruv.framework.vsum.branch.storage.SemanticChangeEntry>>() {
+                }.getType());
+        return info;
+    }
+
+    /**
+     * Builds a FileChangeInfo for an ELEMENT_DELETED entry that carries a list of cascade-deleted
+     * descendant UUIDs. Used to test cascade DELETE_MODIFY and MODIFY_DELETE detection.
+     */
+    private static SemanticChangelogManager.ChangelogDocument.FileChangeInfo fileChangeWithCascade(
+            String path, String elementUuid, List<String> cascadeDeletedUuids) {
+        ChangeEntryJson entry = new ChangeEntryJson();
+        entry.index = 0;
+        entry.changeType = SemanticChangeType.ELEMENT_DELETED.name();
+        entry.changeDescription = SemanticChangeType.ELEMENT_DELETED.getDescription();
+        entry.emfType = "DeleteEObject";
+        entry.elementUuid = elementUuid;
+        entry.position = -1;
+        entry.cascadeDeletedUuids = cascadeDeletedUuids;
 
         SemanticChangelogManager.ChangelogDocument.FileChangeInfo info =
                 new SemanticChangelogManager.ChangelogDocument.FileChangeInfo();
@@ -681,6 +708,122 @@ class SemanticConflictDetectorTest {
 
                 assertFalse(result.hasConflicts(),
                         "containerUuid that does not match any deletion must not produce a tombstone conflict");
+            }
+        }
+    }
+
+
+    @Nested
+    @DisplayName("analyzeBranches - cascade DELETE_MODIFY / MODIFY_DELETE detection")
+    class CascadeConflicts {
+
+        @Test
+        @DisplayName("detects HIGH conflict when A deletes parent (cascadeDeletedUuids) and B modifies the child")
+        void detectsCascadeDeleteModifyWhenADeletesParentAndBModifiesChild(@TempDir Path repoDir) throws Exception {
+            try (Git git = initRepo(repoDir)) {
+                git.branchCreate().setName("feature-x").call();
+
+                // master: deletes "uuid-parent"; its child "uuid-child" is recorded in cascadeDeletedUuids
+                String masterSha = commitFile(git, repoDir, "model.xmi", "", "master deletes parent");
+                commitChangelog(git, repoDir, "master", masterSha.substring(0, 7),
+                        changelogJson(masterSha, "master", List.of(
+                                fileChangeWithCascade("model.xmi", "uuid-parent",
+                                        List.of("uuid-child")))));
+
+                // feature-x: modifies "uuid-child" (the deleted descendant)
+                git.checkout().setName("feature-x").call();
+                String featureSha = commitFile(git, repoDir, "model.xmi", "<model/>", "feature modifies child");
+                commitChangelog(git, repoDir, "feature-x", featureSha.substring(0, 7),
+                        changelogJson(featureSha, "feature-x", List.of(
+                                fileChange("model.xmi", "uuid-child", "name",
+                                        SemanticChangeType.ATTRIBUTE_CHANGED, "Old", "New"))));
+
+                git.checkout().setName("master").call();
+
+                ReplayResult result = new SemanticConflictDetector(repoDir).analyzeBranches("master", "feature-x");
+
+                assertTrue(result.hasConflicts(), "cascade-deleted descendant modified on other branch must conflict");
+                assertEquals(1, result.getConflicts().size());
+                SemanticConflict conflict = result.getConflicts().get(0);
+                assertEquals(ConflictSeverity.HIGH, conflict.getSeverity());
+                assertEquals("uuid-child", conflict.getElementUuid(),
+                        "conflict must reference the modified cascade-deleted child UUID");
+                assertNull(conflict.getFeature(), "cascade conflicts are at lifecycle level -- no feature");
+                assertEquals(SemanticChangeType.ELEMENT_DELETED,
+                        conflict.getChangeOnBranchA().getChangeType(),
+                        "branch A entry must be the ELEMENT_DELETED record");
+                assertEquals(SemanticChangeType.ATTRIBUTE_CHANGED,
+                        conflict.getChangeOnBranchB().getChangeType(),
+                        "branch B entry must be the modifying ATTRIBUTE_CHANGED record");
+            }
+        }
+
+        @Test
+        @DisplayName("detects HIGH conflict when B deletes parent (cascadeDeletedUuids) and A modifies the child")
+        void detectsCascadeModifyDeleteWhenBDeletesParentAndAModifiesChild(@TempDir Path repoDir) throws Exception {
+            try (Git git = initRepo(repoDir)) {
+                git.branchCreate().setName("feature-x").call();
+
+                // master: modifies "uuid-child"
+                String masterSha = commitFile(git, repoDir, "model.xmi", "<model/>", "master modifies child");
+                commitChangelog(git, repoDir, "master", masterSha.substring(0, 7),
+                        changelogJson(masterSha, "master", List.of(
+                                fileChange("model.xmi", "uuid-child", "name",
+                                        SemanticChangeType.ATTRIBUTE_CHANGED, "Old", "New"))));
+
+                // feature-x: deletes "uuid-parent"; "uuid-child" is a cascade descendant
+                git.checkout().setName("feature-x").call();
+                String featureSha = commitFile(git, repoDir, "model.xmi", "", "feature deletes parent");
+                commitChangelog(git, repoDir, "feature-x", featureSha.substring(0, 7),
+                        changelogJson(featureSha, "feature-x", List.of(
+                                fileChangeWithCascade("model.xmi", "uuid-parent",
+                                        List.of("uuid-child")))));
+
+                git.checkout().setName("master").call();
+
+                ReplayResult result = new SemanticConflictDetector(repoDir).analyzeBranches("master", "feature-x");
+
+                assertTrue(result.hasConflicts(), "cascade MODIFY_DELETE must be detected");
+                assertEquals(1, result.getConflicts().size());
+                SemanticConflict conflict = result.getConflicts().get(0);
+                assertEquals(ConflictSeverity.HIGH, conflict.getSeverity());
+                assertEquals("uuid-child", conflict.getElementUuid());
+                assertEquals(SemanticChangeType.ATTRIBUTE_CHANGED,
+                        conflict.getChangeOnBranchA().getChangeType(),
+                        "branch A entry must be the modifying record");
+                assertEquals(SemanticChangeType.ELEMENT_DELETED,
+                        conflict.getChangeOnBranchB().getChangeType(),
+                        "branch B entry must be the ELEMENT_DELETED record");
+            }
+        }
+
+        @Test
+        @DisplayName("no false positive when cascadeDeletedUuids do not overlap with modified UUIDs")
+        void noCascadeFalsePositiveWhenUuidsDoNotOverlap(@TempDir Path repoDir) throws Exception {
+            try (Git git = initRepo(repoDir)) {
+                git.branchCreate().setName("feature-x").call();
+
+                // master: deletes "uuid-parent" with cascadeDeletedUuids = ["uuid-unrelated"]
+                String masterSha = commitFile(git, repoDir, "model.xmi", "", "master deletes parent");
+                commitChangelog(git, repoDir, "master", masterSha.substring(0, 7),
+                        changelogJson(masterSha, "master", List.of(
+                                fileChangeWithCascade("model.xmi", "uuid-parent",
+                                        List.of("uuid-unrelated")))));
+
+                // feature-x: modifies "uuid-different" (not in cascade list)
+                git.checkout().setName("feature-x").call();
+                String featureSha = commitFile(git, repoDir, "model.xmi", "<model/>", "feature modifies different element");
+                commitChangelog(git, repoDir, "feature-x", featureSha.substring(0, 7),
+                        changelogJson(featureSha, "feature-x", List.of(
+                                fileChange("model.xmi", "uuid-different", "name",
+                                        SemanticChangeType.ATTRIBUTE_CHANGED, "Old", "New"))));
+
+                git.checkout().setName("master").call();
+
+                ReplayResult result = new SemanticConflictDetector(repoDir).analyzeBranches("master", "feature-x");
+
+                assertFalse(result.hasConflicts(),
+                        "non-overlapping cascade UUIDs must not produce a false conflict");
             }
         }
     }

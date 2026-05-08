@@ -22,19 +22,19 @@ import tools.vitruv.change.atomic.hid.HierarchicalId;
 public class MergeConflict {
 
     public enum ConflictType {
-        /** Both branches modify the same element's attribute(s) — direct user vs user. */
+        /** Both branches modify the same element's attribute(s) -- direct user vs user. */
         MODIFY_MODIFY,
         /** Target branch deletes an element that source branch modifies. */
         DELETE_MODIFY,
         /** Source branch deletes an element that target branch modifies. */
         MODIFY_DELETE,
-        /** Derived change from replay(A) overwrites user change on B — indirect conflict. */
+        /** Derived change from replay(A) overwrites user change on B -- indirect conflict. */
         INDIRECT_CONFLICT,
-        /** User change from A overwrites derived state on B — non-blocking warning. */
+        /** User change from A overwrites derived state on B -- non-blocking warning. */
         USER_VS_DERIVED_WARNING,
-        /** Both merge directions produce indirect conflicts — true semantic conflict. */
+        /** Both merge directions produce indirect conflicts -- true semantic conflict. */
         BIDIRECTIONAL_INDIRECT_CONFLICT,
-        /** No commit interleaving was found that avoids indirect conflicts — true semantic conflict. */
+        /** No commit interleaving was found that avoids indirect conflicts -- true semantic conflict. */
         INTERLEAVING_CONFLICT,
         /**
          * Replay failed because a target element no longer exists (e.g., deleted or

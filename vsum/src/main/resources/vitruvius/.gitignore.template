@@ -2,3 +2,5 @@
 .vitruvius/*.lock
 .vitruvius/*-trigger
 .vitruvius/validation-result-*
+# Vitruvius project root marker (created by ProjectMarker.markAsProjectRootFolder)
+test_project.marker_vitruv

@@ -16,6 +16,10 @@ import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.EReference;
 import org.eclipse.emf.ecore.resource.Resource;
 import org.eclipse.emf.ecore.util.EcoreUtil;
+import org.eclipse.jgit.lib.ObjectId;
+import org.eclipse.jgit.revwalk.RevWalk;
+import org.eclipse.jgit.storage.file.FileRepositoryBuilder;
+import org.eclipse.jgit.treewalk.TreeWalk;
 import tools.vitruv.change.atomic.uuid.UuidResolver;
 import tools.vitruv.change.correspondence.Correspondence;
 import tools.vitruv.change.correspondence.view.EditableCorrespondenceModelView;
@@ -287,8 +291,13 @@ public class PostMergeHandler {
   }
 
   /**
-   * Copies the VSUM state from the source branch directory to the target branch directory.
+   * Copies the VSUM state from the source branch to the target branch directory.
    * Used after a merge to bring the target branch's VSUM in line with the merged state.
+   *
+   * <p>After a {@code git checkout <targetBranch>}, git removes the source branch's VSUM
+   * files from the working directory because the target branch's tree does not contain them.
+   * When the filesystem source is empty, this method falls back to reading those files
+   * directly from the source branch's HEAD commit in the git object store.
    *
    * @param sourceBranch the branch whose VSUM state should be copied.
    * @param targetBranch the branch that should receive the copied state.
@@ -297,27 +306,82 @@ public class PostMergeHandler {
     checkNotNull(sourceBranch, "sourceBranch must not be null");
     checkNotNull(targetBranch, "targetBranch must not be null");
 
-    Path sourceVsum = repositoryRoot.resolve(".vitruvius/vsum").resolve(sourceBranch);
-    Path targetVsum = repositoryRoot.resolve(".vitruvius/vsum").resolve(targetBranch);
-
-    if (!Files.exists(sourceVsum)) {
-      LOGGER.warn("Source branch '{}' has no VSUM state to copy", sourceBranch);
-      return;
-    }
+    Path vsumRoot = repositoryRoot.resolve(".vitruvius/vsum");
+    Path sourceVsum = vsumRoot.resolve(sourceBranch);
+    Path targetVsum = vsumRoot.resolve(targetBranch);
 
     try {
-      // remove stale target state before copying so no old files linger
       if (Files.exists(targetVsum)) {
         deleteDirectory(targetVsum);
         LOGGER.debug("Removed stale VSUM state for target branch '{}'", targetBranch);
       }
 
-      copyDirectory(sourceVsum, targetVsum);
-      LOGGER.info("Copied VSUM state from '{}' to '{}' after merge", sourceBranch, targetBranch);
-
+      if (hasVsumContent(sourceVsum)) {
+        copyDirectory(sourceVsum, targetVsum);
+        LOGGER.info("Copied VSUM state from '{}' to '{}' after merge (filesystem)",
+            sourceBranch, targetBranch);
+      } else {
+        // git checkout deleted the source branch's VSUM files; read from the object store.
+        LOGGER.info("Filesystem VSUM for '{}' is empty -- restoring from git object store",
+            sourceBranch);
+        restoreVsumFromObjectStore(sourceBranch, targetVsum);
+      }
     } catch (IOException e) {
       LOGGER.error("Failed to copy VSUM state from '{}' to '{}': {}",
           sourceBranch, targetBranch, e.getMessage(), e);
+    }
+  }
+
+  private boolean hasVsumContent(Path vsumDir) {
+    if (!Files.exists(vsumDir)) {
+      return false;
+    }
+    try (var stream = Files.walk(vsumDir)) {
+      return stream.anyMatch(Files::isRegularFile);
+    } catch (IOException e) {
+      return false;
+    }
+  }
+
+  private void restoreVsumFromObjectStore(String sourceBranch, Path targetVsum)
+      throws IOException {
+    String prefix = ".vitruvius/vsum/" + sourceBranch + "/";
+    try (var repo = new FileRepositoryBuilder()
+            .setGitDir(repositoryRoot.resolve(".git").toFile())
+            .readEnvironment()
+            .build();
+        RevWalk revWalk = new RevWalk(repo)) {
+
+      ObjectId branchTip = repo.resolve(sourceBranch);
+      if (branchTip == null) {
+        LOGGER.warn("Cannot resolve branch '{}' in git -- no VSUM state restored", sourceBranch);
+        return;
+      }
+
+      var commit = revWalk.parseCommit(branchTip);
+      try (TreeWalk treeWalk = new TreeWalk(repo)) {
+        treeWalk.addTree(commit.getTree());
+        treeWalk.setRecursive(true);
+        int count = 0;
+        while (treeWalk.next()) {
+          String path = treeWalk.getPathString();
+          if (!path.startsWith(prefix)) {
+            continue;
+          }
+          byte[] bytes = repo.open(treeWalk.getObjectId(0)).getBytes();
+          Path targetFile = targetVsum.resolve(path.substring(prefix.length()));
+          Files.createDirectories(targetFile.getParent());
+          Files.write(targetFile, bytes);
+          count++;
+        }
+        LOGGER.info("Restored {} VSUM file(s) from git object store for branch '{}'",
+            count, sourceBranch);
+      }
+    } catch (IOException e) {
+      throw e;
+    } catch (Exception e) {
+      throw new IOException("Failed to read VSUM from git object store for '"
+          + sourceBranch + "': " + e.getMessage(), e);
     }
   }
 

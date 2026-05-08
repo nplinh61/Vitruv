@@ -1,5 +1,6 @@
 package tools.vitruv.framework.vsum.branch.storage;
 
+import java.util.List;
 import java.util.Objects;
 import lombok.Getter;
 
@@ -112,6 +113,18 @@ public class SemanticChangeEntry {
   private final String containerUuid;
 
   /**
+   * UUIDs of all descendant elements that are implicitly deleted when this element is
+   * removed. Only populated for {@link SemanticChangeType#ELEMENT_DELETED} entries, where
+   * the capturing code walks {@code eAllContents()} of the deleted element before
+   * detachment. {@code null} or empty for all other change types.
+   *
+   * <p>Used by conflict detection to identify modifications on other branches that target
+   * elements which were transitively deleted, even when the modified element's UUID differs
+   * from the directly deleted element's UUID.
+   */
+  private final List<String> cascadeDeletedUuids;
+
+  /**
    * Hierarchical position of the affected element within its resource at the time the change
    * was recorded, expressed as a {@code HierarchicalId} string
    * (e.g. {@code "//elements/0/children/2"}).
@@ -160,6 +173,7 @@ public class SemanticChangeEntry {
     this.to = builder.to;
     this.referencedElementUuid = builder.referencedElementUuid;
     this.containerUuid = builder.containerUuid;
+    this.cascadeDeletedUuids = builder.cascadeDeletedUuids;
     this.position = builder.position;
     this.hierarchicalId = builder.hierarchicalId;
     this.changeOrigin = builder.changeOrigin;
@@ -207,6 +221,8 @@ public class SemanticChangeEntry {
     private String referencedElementUuid;
 
     private String containerUuid;
+
+    private List<String> cascadeDeletedUuids;
 
     private int position = -1;
 
@@ -298,6 +314,15 @@ public class SemanticChangeEntry {
     }
 
     /**
+     * Sets the UUIDs of all descendant elements implicitly deleted with this element.
+     * Only meaningful for {@link SemanticChangeType#ELEMENT_DELETED} entries.
+     */
+    public Builder cascadeDeletedUuids(List<String> cascadeDeletedUuids) {
+      this.cascadeDeletedUuids = cascadeDeletedUuids;
+      return this;
+    }
+
+    /**
      * Sets the zero-based list index at which the value was inserted or removed.
      */
     public Builder position(int position) {
@@ -350,6 +375,7 @@ public class SemanticChangeEntry {
         && Objects.equals(to, that.to)
         && Objects.equals(referencedElementUuid, that.referencedElementUuid)
         && Objects.equals(containerUuid, that.containerUuid)
+        && Objects.equals(cascadeDeletedUuids, that.cascadeDeletedUuids)
         && Objects.equals(hierarchicalId, that.hierarchicalId)
         && Objects.equals(changeOrigin, that.changeOrigin);
   }
@@ -358,7 +384,8 @@ public class SemanticChangeEntry {
   public int hashCode() {
     return Objects.hash(
         index, changeType, emfType, elementUuid, eClass, feature, from, to,
-        referencedElementUuid, containerUuid, position, hierarchicalId, changeOrigin);
+        referencedElementUuid, containerUuid, cascadeDeletedUuids, position,
+        hierarchicalId, changeOrigin);
   }
 
   @Override
@@ -370,6 +397,7 @@ public class SemanticChangeEntry {
         + ", elementUuid='" + elementUuid + '\''
         + ", hierarchicalId='" + hierarchicalId + '\''
         + ", containerUuid='" + containerUuid + '\''
+        + ", cascadeDeletedUuids=" + cascadeDeletedUuids
         + ", feature='" + feature + '\''
         + ", from='" + from + '\''
         + ", to='" + to + '\''

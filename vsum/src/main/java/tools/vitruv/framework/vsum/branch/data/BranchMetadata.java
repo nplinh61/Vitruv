@@ -10,7 +10,9 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import lombok.Getter;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -128,13 +130,19 @@ public class BranchMetadata {
         ? MaturityLevel.valueOf(json.get("maturity").getAsString())
         : MaturityLevel.DRAFT;
     String parent = requireField(json, "parentBranch", path);
-    LocalDateTime createdAt = LocalDateTime.parse(
-        requireField(json, "createdAt", path), TIMESTAMP_FORMAT);
-    LocalDateTime lastModified = LocalDateTime.parse(
-        requireField(json, "lastModified", path), TIMESTAMP_FORMAT);
+    LocalDateTime createdAt = parseFlexibleDateTime(requireField(json, "createdAt", path));
+    LocalDateTime lastModified = parseFlexibleDateTime(requireField(json, "lastModified", path));
 
     LOGGER.debug("read branch metadata from {}", path);
     return new BranchMetadata(name, state, parent, createdAt, lastModified, maturity);
+  }
+
+  private static LocalDateTime parseFlexibleDateTime(String text) {
+    try {
+      return LocalDateTime.parse(text, TIMESTAMP_FORMAT);
+    } catch (DateTimeParseException e) {
+      return OffsetDateTime.parse(text).toLocalDateTime();
+    }
   }
 
   private static String requireField(JsonObject json, String key, Path path) {

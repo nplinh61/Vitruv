@@ -293,7 +293,7 @@ public class VsumFileSystemLayout {
                 String fragment = matcher.group(2) != null ? matcher.group(2) : "";
 
                 // Only rebase relative hrefs (no scheme like "file:" or "http:").
-                // Empty uriPart means a same-document fragment reference — leave unchanged.
+                // Empty uriPart means a same-document fragment reference -- leave unchanged.
                 if (!uriPart.isEmpty() && !uriPart.contains(":")) {
                     try {
                         // Resolve the relative href against the SOURCE directory to get the
@@ -306,7 +306,7 @@ public class VsumFileSystemLayout {
                             "href=\"" + Matcher.quoteReplacement(newHref) + "\"");
                         changed = true;
                     } catch (IllegalArgumentException e) {
-                        // Paths on different roots — keep the original href.
+                        // Paths on different roots -- keep the original href.
                         matcher.appendReplacement(sb, Matcher.quoteReplacement(matcher.group(0)));
                     }
                 } else {

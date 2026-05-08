@@ -1,12 +1,14 @@
 package tools.vitruv.framework.vsum.branch.util;
 
 import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.lib.StoredConfig;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -239,6 +241,141 @@ class GitHookInstallerTest {
             // complete silently rather than throwing a file-not-found exception.
             assertDoesNotThrow(installer::uninstallPostCheckoutHook);
             assertDoesNotThrow(installer::uninstallPreCommitHook);
+        }
+    }
+
+    // --- installGitAttributes() ---
+
+    /**
+     * Verifies that installGitAttributes writes the guard comment and a merge=vitruvius
+     * pattern line for each supplied extension.
+     */
+    @Test
+    @DisplayName("installGitAttributes writes guard and pattern lines for each extension")
+    void installGitAttributesWritesCorrectContent(@TempDir Path tempDir) throws Exception {
+        try (var ignored = Git.init().setDirectory(tempDir.toFile()).call()) {
+            var installer = new GitHookInstaller(tempDir);
+
+            installer.installGitAttributes(List.of("model", "xmi"));
+
+            String content = Files.readString(tempDir.resolve(".gitattributes"));
+            assertTrue(content.contains("# Vitruvius merge driver"),
+                    ".gitattributes must contain the guard comment");
+            assertTrue(content.contains("*.model merge=vitruvius"),
+                    ".gitattributes must map *.model to the vitruvius merge driver");
+            assertTrue(content.contains("*.xmi merge=vitruvius"),
+                    ".gitattributes must map *.xmi to the vitruvius merge driver");
+        }
+    }
+
+    /**
+     * Verifies that an extension already prefixed with "*." is not double-prefixed.
+     */
+    @Test
+    @DisplayName("installGitAttributes does not double-prefix extensions that start with *.")
+    void installGitAttributesNormalizesExtensionPrefix(@TempDir Path tempDir) throws Exception {
+        try (var ignored = Git.init().setDirectory(tempDir.toFile()).call()) {
+            var installer = new GitHookInstaller(tempDir);
+
+            installer.installGitAttributes(List.of("*.brakesystem"));
+
+            String content = Files.readString(tempDir.resolve(".gitattributes"));
+            assertTrue(content.contains("*.brakesystem merge=vitruvius"),
+                    "extension already starting with *. must not be double-prefixed");
+            assertFalse(content.contains("*.*.brakesystem"),
+                    "double-prefixed pattern must not appear");
+        }
+    }
+
+    /**
+     * Verifies that calling installGitAttributes twice does not add duplicate entries.
+     */
+    @Test
+    @DisplayName("installGitAttributes is idempotent -- second call adds no duplicate lines")
+    void installGitAttributesIsIdempotent(@TempDir Path tempDir) throws Exception {
+        try (var ignored = Git.init().setDirectory(tempDir.toFile()).call()) {
+            var installer = new GitHookInstaller(tempDir);
+
+            installer.installGitAttributes(List.of("model"));
+            installer.installGitAttributes(List.of("model"));
+
+            String content = Files.readString(tempDir.resolve(".gitattributes"));
+            long guardCount = content.lines()
+                    .filter(l -> l.equals("# Vitruvius merge driver"))
+                    .count();
+            assertEquals(1, guardCount,
+                    "guard comment must appear exactly once after two calls");
+        }
+    }
+
+    /**
+     * Verifies that installGitAttributes appends to an existing .gitattributes
+     * without overwriting the pre-existing content.
+     */
+    @Test
+    @DisplayName("installGitAttributes appends to an existing .gitattributes")
+    void installGitAttributesAppendsToExistingFile(@TempDir Path tempDir) throws Exception {
+        try (var ignored = Git.init().setDirectory(tempDir.toFile()).call()) {
+            var installer = new GitHookInstaller(tempDir);
+            Path gitattributes = tempDir.resolve(".gitattributes");
+            Files.writeString(gitattributes, "*.txt text=auto\n");
+
+            installer.installGitAttributes(List.of("model"));
+
+            String content = Files.readString(gitattributes);
+            assertTrue(content.contains("*.txt text=auto"),
+                    "pre-existing content must be preserved");
+            assertTrue(content.contains("*.model merge=vitruvius"),
+                    "new pattern must be appended");
+        }
+    }
+
+    // --- installMergeDriverConfig() ---
+
+    /**
+     * Verifies that installMergeDriverConfig writes the merge-driver.properties file
+     * with the correct specifications= line.
+     */
+    @Test
+    @DisplayName("installMergeDriverConfig writes merge-driver.properties with spec classes")
+    void installMergeDriverConfigWritesPropertiesFile(@TempDir Path tempDir) throws Exception {
+        try (var ignored = Git.init().setDirectory(tempDir.toFile()).call()) {
+            var installer = new GitHookInstaller(tempDir);
+
+            installer.installMergeDriverConfig(
+                    "java -jar vitruvius.jar %O %A %B %L %P",
+                    List.of("com.example.AToB", "com.example.BToA"));
+
+            Path propsFile = tempDir.resolve(".vitruvius/merge-driver.properties");
+            assertTrue(Files.exists(propsFile),
+                    "merge-driver.properties must be created");
+            String content = Files.readString(propsFile);
+            assertTrue(content.contains("specifications=com.example.AToB,com.example.BToA"),
+                    "properties file must list all spec classes separated by commas");
+        }
+    }
+
+    /**
+     * Verifies that installMergeDriverConfig writes the [merge "vitruvius"] section
+     * to .git/config with the correct driver command.
+     */
+    @Test
+    @DisplayName("installMergeDriverConfig writes [merge vitruvius] section to .git/config")
+    void installMergeDriverConfigWritesGitConfig(@TempDir Path tempDir) throws Exception {
+        try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
+            var installer = new GitHookInstaller(tempDir);
+            String driverCommand = "java -jar vitruvius.jar %O %A %B %L %P";
+
+            installer.installMergeDriverConfig(driverCommand, List.of("com.example.Spec"));
+
+            StoredConfig config = git.getRepository().getConfig();
+            config.load();
+            assertEquals("Vitruvius semantic merge",
+                    config.getString("merge", "vitruvius", "name"),
+                    "merge driver name must be 'Vitruvius semantic merge'");
+            assertEquals(driverCommand,
+                    config.getString("merge", "vitruvius", "driver"),
+                    "merge driver command must match what was passed to the installer");
         }
     }
 }

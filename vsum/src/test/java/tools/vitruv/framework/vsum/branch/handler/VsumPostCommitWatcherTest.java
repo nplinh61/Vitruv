@@ -14,7 +14,7 @@ import static org.junit.jupiter.api.Assertions.*;
  *
  * <p>The watcher's sole responsibility is lifecycle management and trigger detection:
  * it polls for a {@link PostCommitTriggerFile}, clears it when found, and delegates
- * to {@link PostCommitHandler}. Tests verify these behaviors only — post-commit
+ * to {@link PostCommitHandler}. Tests verify these behaviors only -- post-commit
  * actions are the responsibility of {@link PostCommitHandler} and tested separately.
  */
 class VsumPostCommitWatcherTest {

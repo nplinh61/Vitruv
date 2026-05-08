@@ -24,7 +24,21 @@ import tools.vitruv.change.composite.description.VitruviusChange;
 import tools.vitruv.change.composite.propagation.ChangePropagationListener;
 
 /**
- * Captures primary EChanges during {@code propagateChange()} calls and converts
+ * Extension point for Tural's consequential footprint component (merge pipeline steps 5-8).
+ *
+ * <p>This class is <b>not registered in production</b>. The canonical listener for change
+ * capture in production is
+ * {@link tools.vitruv.framework.vsum.branch.SemanticChangeBuffer}.
+ * {@code ChangeLogCapture} provides richer data for the interleaved replay algorithm: it
+ * records consequential footprints (element+feature pairs touched by Reactions) and
+ * cascade-deleted child UUIDs, both of which are needed for the indirect conflict
+ * detection steps. Tural's scope is to integrate {@code ChangeLogCapture} as the
+ * active {@link ChangePropagationListener} so that footprints are captured at commit time
+ * and stored alongside the changelog entries.
+ *
+ * <hr>
+ *
+ * <p>Captures primary EChanges during {@code propagateChange()} calls and converts
  * them to HierarchicalId-based representation. Also tracks UUID→HierarchicalId
  * mappings for cross-branch element identity during merge conflict detection.
  *
@@ -187,7 +201,7 @@ public class ChangeLogCapture implements ChangePropagationListener {
                         String uuid = uuidResolver.getUuid(element).toString();
                         consequentialFootprints.add(uuid + "#" + featureName);
                     } catch (IllegalStateException e) {
-                        // Element not in resolver (transiently created by reaction) — skip
+                        // Element not in resolver (transiently created by reaction) -- skip
                     }
                 }
             }
@@ -197,7 +211,7 @@ public class ChangeLogCapture implements ChangePropagationListener {
             pendingChange = null;
             pendingUuidStrings.clear();
             preCapturedIds.clear();
-            // Note: cascadeDeletedUuids is NOT cleared here — it is drained
+            // Note: cascadeDeletedUuids is NOT cleared here -- it is drained
             // by drainCascadeDeletedUuids() alongside drainChanges().
         }
     }
@@ -255,7 +269,7 @@ public class ChangeLogCapture implements ChangePropagationListener {
                             return hierarchicalIdResolver.getAndUpdateId(eObject);
                         }
                     } catch (Exception e) {
-                        // Element may have been deleted during propagation — fall through
+                        // Element may have been deleted during propagation -- fall through
                     }
                     // Fall back to pre-captured ID (captured in startedChangePropagation
                     // before the element was removed from the model)
@@ -264,7 +278,7 @@ public class ChangeLogCapture implements ChangePropagationListener {
                         return preCaptured;
                     }
                     throw new IllegalStateException(
-                            "Cannot resolve UUID " + uuid + " — element deleted and no pre-captured ID");
+                            "Cannot resolve UUID " + uuid + " -- element deleted and no pre-captured ID");
                 },
                 resource -> resource
         );

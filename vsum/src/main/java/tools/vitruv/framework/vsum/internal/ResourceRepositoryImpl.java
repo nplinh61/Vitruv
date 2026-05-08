@@ -151,7 +151,7 @@ class ResourceRepositoryImpl implements ModelRepository {
 
 
     private void writeModelsFile() throws IOException {
-        // Exclude internal V-SUM resources that live under .vitruvius/ — these are framework
+        // Exclude internal V-SUM resources that live under .vitruvius/ -- these are framework
         // artefacts (uuid resolver helpers, cached metadata) that must not be reloaded as user
         // models on the next startup.  Only the user-visible model files belong in models.models.
         Path vitruviusDir = fileSystemLayout.getVsumProjectFolder().resolve(".vitruvius");

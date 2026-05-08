@@ -238,6 +238,7 @@ public class SemanticConflictDetector {
       // The engine performs checkout-based replay, so it needs the full commit SHAs and a
       // valid common ancestor. When no engine is provided, the stub pipeline runs below.
       if (mergeEngine != null && ancestorSha != null) {
+        mergeEngine.setSkipDirectConflictDetection(true); // steps 1-4 already ran
         try {
           SemanticMergeResult engineResult =
               mergeEngine.mergeBidirectional(ancestorSha, fullShaA, fullShaB);
@@ -248,6 +249,8 @@ public class SemanticConflictDetector {
           LOGGER.warn("Merge engine delegation failed, falling back to stub pipeline: {}",
               e.getMessage());
           // Fall through to stub steps below.
+        } finally {
+          mergeEngine.setSkipDirectConflictDetection(false);
         }
       }
 
@@ -551,12 +554,62 @@ public class SemanticConflictDetector {
       }
     }
 
+    // --- Cascade DELETE_MODIFY / MODIFY_DELETE detection ---
+    // Cross-checks the full deletion map (including cascade descendants) against the set
+    // of all modified UUIDs on the opposing branch. This catches cases where a deeply
+    // nested descendant of a deleted element was also modified on the other branch,
+    // which the pairwise loop and containerUuid tombstone check cannot detect.
+    // Skip UUIDs already recorded by the pairwise or tombstone loops (key "uuid|null").
+    Set<String> modifiedUuidsB = extractModifiedUuids(changesB);
+    for (Map.Entry<String, SemanticChangeEntry> entry : deletedByA.entrySet()) {
+      String deletedUuid = entry.getKey();
+      if (!modifiedUuidsB.contains(deletedUuid)) continue;
+      if (best.containsKey(deletedUuid + "|null")
+          || best.containsKey(deletedUuid + "|cascade")) continue;
+      changesB.stream()
+          .filter(e -> deletedUuid.equals(e.getElementUuid())
+              && e.getChangeType() != SemanticChangeType.ELEMENT_CREATED)
+          .findFirst()
+          .ifPresent(modifyingB -> {
+            LOGGER.info("Cascade DELETE_MODIFY: branch A deleted '{}'; branch B modified it",
+                deletedUuid);
+            best.put(deletedUuid + "|cascade",
+                new SemanticConflict(deletedUuid, null,
+                    entry.getValue(), modifyingB, ConflictSeverity.HIGH));
+          });
+    }
+
+    Set<String> modifiedUuidsA = extractModifiedUuids(changesA);
+    for (Map.Entry<String, SemanticChangeEntry> entry : deletedByB.entrySet()) {
+      String deletedUuid = entry.getKey();
+      if (!modifiedUuidsA.contains(deletedUuid)) continue;
+      if (best.containsKey(deletedUuid + "|null")
+          || best.containsKey(deletedUuid + "|cascade")) continue;
+      changesA.stream()
+          .filter(e -> deletedUuid.equals(e.getElementUuid())
+              && e.getChangeType() != SemanticChangeType.ELEMENT_CREATED)
+          .findFirst()
+          .ifPresent(modifyingA -> {
+            LOGGER.info("Cascade MODIFY_DELETE: branch A modified '{}'; branch B deleted it",
+                deletedUuid);
+            best.put(deletedUuid + "|cascade",
+                new SemanticConflict(deletedUuid, null,
+                    modifyingA, entry.getValue(), ConflictSeverity.HIGH));
+          });
+    }
+
     return new ArrayList<>(best.values());
   }
 
   /**
-   * Builds a map from element UUID to its {@link SemanticChangeType#ELEMENT_DELETED} entry.
-   * Used by tombstone conflict detection in {@link #detectConflicts}.
+   * Builds a map from element UUID to the {@link SemanticChangeType#ELEMENT_DELETED} entry
+   * that caused the deletion (directly or transitively). Includes:
+   * <ul>
+   *   <li>The directly deleted element's UUID.</li>
+   *   <li>All UUIDs from {@link SemanticChangeEntry#getCascadeDeletedUuids()}, which covers
+   *       descendants whose deletion was captured by walking {@code eAllContents()} at
+   *       changelog capture time.</li>
+   * </ul>
    */
   private static Map<String, SemanticChangeEntry> buildDeletionMap(
       List<SemanticChangeEntry> changes) {
@@ -566,9 +619,32 @@ public class SemanticConflictDetector {
           && e.getElementUuid() != null
           && !e.getElementUuid().equals("unknown")) {
         map.putIfAbsent(e.getElementUuid(), e);
+        if (e.getCascadeDeletedUuids() != null) {
+          for (String cascadeUuid : e.getCascadeDeletedUuids()) {
+            map.putIfAbsent(cascadeUuid, e);
+          }
+        }
       }
     }
     return map;
+  }
+
+  /**
+   * Collects the UUIDs of all elements modified by the given changes (any change type
+   * except {@link SemanticChangeType#ELEMENT_CREATED}). Used for cross-checking against
+   * the deletion map to detect DELETE_MODIFY and MODIFY_DELETE conflicts.
+   */
+  private static Set<String> extractModifiedUuids(List<SemanticChangeEntry> changes) {
+    Set<String> modified = new HashSet<>();
+    for (SemanticChangeEntry e : changes) {
+      if (e.getElementUuid() != null
+          && !"unknown".equals(e.getElementUuid())
+          && e.getChangeType() != SemanticChangeType.ELEMENT_CREATED
+          && e.getChangeType() != SemanticChangeType.ELEMENT_DELETED) {
+        modified.add(e.getElementUuid());
+      }
+    }
+    return modified;
   }
 
   /**
@@ -610,15 +686,36 @@ public class SemanticConflictDetector {
       return null;
     }
 
+    // Multi-valued reference list operations (INSERT/REMOVE) are independent when they
+    // target different referenced element UUIDs. Only pairs that target the exact same
+    // element UUID conflict (e.g. one branch inserts X and the other removes X).
+    // Note: identical INSERTs or REMOVEs are already resolved as null above via to==to.
+    if (typeA == SemanticChangeType.REFERENCE_VALUE_INSERTED
+        && typeB == SemanticChangeType.REFERENCE_VALUE_INSERTED) {
+      // Both inserting different elements into the same list -- mergeable, not a conflict.
+      return null;
+    }
+    if (typeA == SemanticChangeType.REFERENCE_VALUE_REMOVED
+        && typeB == SemanticChangeType.REFERENCE_VALUE_REMOVED) {
+      // Both removing (different) elements -- independent operations, not a conflict.
+      return null;
+    }
+    if (typeA == SemanticChangeType.REFERENCE_VALUE_INSERTED
+        && typeB == SemanticChangeType.REFERENCE_VALUE_REMOVED) {
+      // One branch inserts element X, other removes element X -- conflict only if same UUID.
+      return Objects.equals(a.getTo(), b.getFrom()) ? ConflictSeverity.HIGH : null;
+    }
+    if (typeA == SemanticChangeType.REFERENCE_VALUE_REMOVED
+        && typeB == SemanticChangeType.REFERENCE_VALUE_INSERTED) {
+      // Mirror: one branch removes X, other inserts X -- conflict only if same UUID.
+      return Objects.equals(a.getFrom(), b.getTo()) ? ConflictSeverity.HIGH : null;
+    }
+
     // Both sides changed the same feature to different values - this is a conflict.
     // Reference changes are HIGH: they affect model structure, not just scalar data.
     // An incorrect reference can break model consistency entirely.
     if (typeA == SemanticChangeType.REFERENCE_CHANGED
         || typeB == SemanticChangeType.REFERENCE_CHANGED
-        || typeA == SemanticChangeType.REFERENCE_VALUE_INSERTED
-        || typeB == SemanticChangeType.REFERENCE_VALUE_INSERTED
-        || typeA == SemanticChangeType.REFERENCE_VALUE_REMOVED
-        || typeB == SemanticChangeType.REFERENCE_VALUE_REMOVED
         || typeA == SemanticChangeType.REFERENCE_SET
         || typeB == SemanticChangeType.REFERENCE_SET
         || typeA == SemanticChangeType.REFERENCE_CLEARED

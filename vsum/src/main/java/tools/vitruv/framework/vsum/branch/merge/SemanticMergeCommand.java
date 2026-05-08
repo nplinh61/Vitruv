@@ -92,8 +92,8 @@ public class SemanticMergeCommand {
      * If both directions have indirect conflicts, the merge is reported as a true conflict.
      *
      * @param repoRoot      the Git repository root
-     * @param branchA       first branch name (symmetric — not source/target)
-     * @param branchB       second branch name (symmetric — not source/target)
+     * @param branchA       first branch name (symmetric -- not source/target)
+     * @param branchB       second branch name (symmetric -- not source/target)
      * @param specs         the change propagation specifications
      * @param interactionProvider user interaction provider for VSUM creation
      * @param conflictResolutionProvider optional provider for resolving direct conflicts

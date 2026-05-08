@@ -72,6 +72,12 @@ public class SemanticMergeEngine {
     private final InteractionResultProvider interactionProvider;
     private final ConflictResolutionProvider conflictResolutionProvider;
     private final IntraBranchDependencyMode intraBranchMode;
+    /**
+     * When {@code true}, the UUID-based conflict detection pass inside {@link #merge} is skipped.
+     * Set by {@link SemanticConflictDetector} before delegating steps 5-9, since steps 1-4
+     * already performed direct conflict detection on the same data.
+     */
+    private boolean skipDirectConflictDetection = false;
 
     public SemanticMergeEngine(Path repoRoot,
                                 Collection<ChangePropagationSpecification> specs,
@@ -97,6 +103,18 @@ public class SemanticMergeEngine {
         this.interactionProvider = interactionProvider;
         this.conflictResolutionProvider = conflictResolutionProvider;
         this.intraBranchMode = intraBranchMode;
+    }
+
+    /**
+     * Instructs this engine to skip the UUID-based direct conflict detection pass in
+     * {@link #merge}. Call this before delegating from {@link tools.vitruv.framework.vsum.branch.SemanticConflictDetector}
+     * so the engine does not redo work that steps 1-4 already performed. Reset to
+     * {@code false} in a {@code finally} block after the merge call returns.
+     *
+     * @param skip {@code true} to skip, {@code false} to run (default)
+     */
+    public void setSkipDirectConflictDetection(boolean skip) {
+        this.skipDirectConflictDetection = skip;
     }
 
     /**
@@ -135,7 +153,7 @@ public class SemanticMergeEngine {
 
         // 2. If direct conflicts with no resolver, return immediately
         if (!forwardResult.isSuccess()) {
-            MergeTracer.trace("[BIDIR] Forward merge (A→B) failed with direct conflicts — aborting");
+            MergeTracer.trace("[BIDIR] Forward merge (A→B) failed with direct conflicts -- aborting");
             return forwardResult;
         }
 
@@ -145,16 +163,16 @@ public class SemanticMergeEngine {
                 .toList();
 
         if (forwardIndirect.isEmpty()) {
-            LOGGER.info("Forward merge (A→B) clean — no indirect conflicts");
-            MergeTracer.trace("[BIDIR] Forward merge (A→B) clean — no indirect conflicts");
+            LOGGER.info("Forward merge (A→B) clean -- no indirect conflicts");
+            MergeTracer.trace("[BIDIR] Forward merge (A→B) clean -- no indirect conflicts");
             MergeTracer.trace("[BIDIR] Using forward result");
             return forwardResult;
         }
 
-        LOGGER.info("Forward merge (A→B) has {} indirect conflict(s) — attempting reverse (B→A)",
+        LOGGER.info("Forward merge (A→B) has {} indirect conflict(s) -- attempting reverse (B→A)",
                 forwardIndirect.size());
         MergeTracer.trace("[BIDIR] Forward merge (A→B) has " + forwardIndirect.size()
-                + " indirect conflict(s) — attempting reverse (B→A)");
+                + " indirect conflict(s) -- attempting reverse (B→A)");
 
         // 4. Try reverse: replay B onto A (ours=A, theirs=B)
         //    For the reverse direction, we need to invert the conflict resolution provider
@@ -167,7 +185,7 @@ public class SemanticMergeEngine {
         // 5. If reverse had direct conflicts (no resolver), return forward result as-is
         //    (direct conflicts are symmetric, so this shouldn't happen if forward succeeded)
         if (!reverseResult.isSuccess()) {
-            LOGGER.warn("Reverse merge (B→A) failed with direct conflicts — returning forward result");
+            LOGGER.warn("Reverse merge (B→A) failed with direct conflicts -- returning forward result");
             return forwardResult;
         }
 
@@ -177,8 +195,8 @@ public class SemanticMergeEngine {
                 .toList();
 
         if (reverseIndirect.isEmpty()) {
-            LOGGER.info("Reverse merge (B→A) clean — using reversed result");
-            MergeTracer.trace("[BIDIR] Reverse merge (B→A) clean — using REVERSED result");
+            LOGGER.info("Reverse merge (B→A) clean -- using reversed result");
+            MergeTracer.trace("[BIDIR] Reverse merge (B→A) clean -- using REVERSED result");
             // Return reverse result annotated as REVERSED
             List<MergeConflict> reverseWarnings = reverseResult.getWarnings();
             if (!reverseResult.getAppliedResolutions().isEmpty()) {
@@ -196,8 +214,8 @@ public class SemanticMergeEngine {
                     SemanticMergeResult.MergeDirection.REVERSED);
         }
 
-        // 7. Both directions have indirect conflicts — true conflict
-        LOGGER.warn("Both directions have indirect conflicts — escalating to true conflict");
+        // 7. Both directions have indirect conflicts -- true conflict
+        LOGGER.warn("Both directions have indirect conflicts -- escalating to true conflict");
         MergeTracer.trace("[BIDIR] Both directions have indirect conflicts → BIDIRECTIONAL_INDIRECT_CONFLICT");
         List<MergeConflict> bidirectionalConflicts = new ArrayList<>();
         for (MergeConflict ic : forwardIndirect) {
@@ -287,7 +305,7 @@ public class SemanticMergeEngine {
         List<SemanticChangeLog.ChangeDto> aDtos = aTransactions.stream().flatMap(List::stream).toList();
         List<SemanticChangeLog.ChangeDto> bDtos = bTransactions.stream().flatMap(List::stream).toList();
 
-        // Check direct (MODIFY_MODIFY) conflicts — cannot be resolved by reordering
+        // Check direct (MODIFY_MODIFY) conflicts -- cannot be resolved by reordering
         UuidConflictDetector detector = new UuidConflictDetector();
         List<MergeConflict> directConflicts = detector.detectConflicts(aDtos, bDtos);
         if (!directConflicts.isEmpty() && conflictResolutionProvider == null) {
@@ -302,14 +320,14 @@ public class SemanticMergeEngine {
             return SemanticMergeResult.success(List.of(), baseDir);
         }
 
-        // Compute direct footprints (free — from changelog DTOs)
+        // Compute direct footprints (free -- from changelog DTOs)
         List<Set<String>> aDirectFP = aTransactions.stream()
                 .map(this::collectUuidFootprints).toList();
         List<Set<String>> bDirectFP = bTransactions.stream()
                 .map(this::collectUuidFootprints).toList();
 
         // Collect all known UUIDs from both branches' changelogs.
-        // Only footprints for these elements matter for dependency analysis — elements
+        // Only footprints for these elements matter for dependency analysis -- elements
         // created by reactions get new random UUIDs that can't conflict across branches.
         Set<String> knownUuids = new HashSet<>();
         for (var dto : aDtos) { if (dto.affectedElementUuid != null) knownUuids.add(dto.affectedElementUuid); }
@@ -330,13 +348,13 @@ public class SemanticMergeEngine {
         if (!hasStoredFP) {
             LOGGER.warn("Changelogs do not contain stored consequential footprints. "
                     + "Ensure changelogs are created with ChangeLogCapture.drainConsequentialFootprints().");
-            // Fall back to empty footprints — the fixpoint loop will discover them via replay
-            MergeTracer.trace("[INTERLEAVE] No stored footprints — starting with empty estimates for "
+            // Fall back to empty footprints -- the fixpoint loop will discover them via replay
+            MergeTracer.trace("[INTERLEAVE] No stored footprints -- starting with empty estimates for "
                     + m + " A-commits and " + n + " B-commits");
             for (int i = 0; i < m; i++) aReactionFP.add(new HashSet<>());
             for (int j = 0; j < n; j++) bReactionFP.add(new HashSet<>());
         } else {
-            // Use stored footprints (fast path — no replay needed).
+            // Use stored footprints (fast path -- no replay needed).
             // Filter to only include elements with UUIDs known from changelogs.
             MergeTracer.trace("[INTERLEAVE] Using stored consequential footprints for "
                     + m + " A-commits and " + n + " B-commits");
@@ -452,7 +470,7 @@ public class SemanticMergeEngine {
                     if (!duplicate) {
                         runtimeEdges.add(newEdge);
                         LOGGER.info("[INTERLEAVE] Guard failure: adding runtime edge "
-                                + "{}[{}] → {}[{}] — retrying",
+                                + "{}[{}] → {}[{}] -- retrying",
                                 gf.failedFromA() ? "A" : "B", gf.failedCommitIndex(),
                                 gf.failedFromA() ? "B" : "A", gf.lastOtherBranchCommitIndex());
                         MergeTracer.trace("[INTERLEAVE] Guard failure → runtime edge "
@@ -462,7 +480,7 @@ public class SemanticMergeEngine {
                         continue; // Retry with updated graph
                     }
 
-                    LOGGER.warn("[INTERLEAVE] Duplicate runtime edge — no progress. "
+                    LOGGER.warn("[INTERLEAVE] Duplicate runtime edge -- no progress. "
                             + "Falling back to enumeration");
                 } else {
                     LOGGER.warn("[INTERLEAVE] Guard failure without identifiable dependency. "
@@ -483,7 +501,7 @@ public class SemanticMergeEngine {
                 if (actual != null && !aReactionFP.get(i).containsAll(actual)) {
                     LOGGER.info("[INTERLEAVE] A[{}] gained new reaction footprint entries: {}",
                             i, minus(actual, aReactionFP.get(i)));
-                    // Enlarge the estimate (monotone union) — footprints only grow, never shrink
+                    // Enlarge the estimate (monotone union) -- footprints only grow, never shrink
                     aReactionFP.get(i).addAll(actual);
                     footprintsStabilized = false;
                 }
@@ -509,7 +527,7 @@ public class SemanticMergeEngine {
                         result.getMergedStateFolder(),
                         SemanticMergeResult.MergeDirection.INTERLEAVED);
             }
-            MergeTracer.trace("[INTERLEAVE] New reaction footprints discovered — re-sorting");
+            MergeTracer.trace("[INTERLEAVE] New reaction footprints discovered -- re-sorting");
         }
 
         // Max iterations exceeded
@@ -669,9 +687,9 @@ public class SemanticMergeEngine {
                     aDtos, bDtos, hidToUuid);
 
             if (result == null) {
-                // Guard failure: this ordering makes some commit inapplicable — skip it
-                LOGGER.info("[FALLBACK] Ordering {}/{} is inapplicable — skipping", oi + 1, orderings.size());
-                MergeTracer.trace("[FALLBACK] Ordering " + (oi + 1) + " inapplicable (guard failure) — skipped");
+                // Guard failure: this ordering makes some commit inapplicable -- skip it
+                LOGGER.info("[FALLBACK] Ordering {}/{} is inapplicable -- skipping", oi + 1, orderings.size());
+                MergeTracer.trace("[FALLBACK] Ordering " + (oi + 1) + " inapplicable (guard failure) -- skipped");
                 continue;
             }
 
@@ -686,7 +704,7 @@ public class SemanticMergeEngine {
             }
         }
 
-        LOGGER.warn("[FALLBACK] No clean interleaving found — escalating to INTERLEAVING_CONFLICT");
+        LOGGER.warn("[FALLBACK] No clean interleaving found -- escalating to INTERLEAVING_CONFLICT");
         MergeTracer.trace("[FALLBACK] No clean ordering found → INTERLEAVING_CONFLICT");
 
         return SemanticMergeResult.conflict(List.of(new MergeConflict(
@@ -727,7 +745,7 @@ public class SemanticMergeEngine {
                     String uuid = uuidResolver.getUuid(element).toString();
                     footprints.add(uuid + "#" + featureName);
                 } catch (IllegalStateException e) {
-                    // Element not in resolver (transiently created) — skip
+                    // Element not in resolver (transiently created) -- skip
                 }
             }
         }
@@ -780,7 +798,7 @@ public class SemanticMergeEngine {
                     edges.add(new int[]{i, j});
                     LOGGER.debug("Intra-branch edge A[{}] → A[{}] (footprint overlap)", i, j);
                 }
-                // If neither direction has overlap, commits are independent — no edge
+                // If neither direction has overlap, commits are independent -- no edge
             }
         }
 
@@ -950,10 +968,16 @@ public class SemanticMergeEngine {
         gitStateExtractionNanos = System.nanoTime() - phaseStart;
         LOGGER.info("[TIMING] Git state extraction: {} ms", gitStateExtractionNanos / 1_000_000);
 
-        // 2. Load changelog DTOs
+        // 2. Load changelog DTOs -- subtract base changelogs so that only NET changes
+        // per branch are compared. Both branches inherit the base's changelog files;
+        // including them in conflict detection produces false MODIFY_MODIFY positives
+        // when only one side actually changed an element relative to the base.
         phaseStart = System.nanoTime();
-        List<SemanticChangeLog.ChangeDto> oursDtos = loadAllDtosFromDir(oursDir);
-        List<SemanticChangeLog.ChangeDto> theirsDtos = loadAllDtosFromDir(theirsDir);
+        Set<String> baseChangelogPaths = getChangelogRelativePaths(baseDir);
+        List<SemanticChangeLog.ChangeDto> oursDtos =
+                loadAllDtosExcluding(oursDir, baseChangelogPaths);
+        List<SemanticChangeLog.ChangeDto> theirsDtos =
+                loadAllDtosExcluding(theirsDir, baseChangelogPaths);
         dtoLoadingNanos = System.nanoTime() - phaseStart;
         LOGGER.info("Loaded {} ours DTOs, {} theirs DTOs", oursDtos.size(), theirsDtos.size());
         LOGGER.info("[TIMING] DTO loading: {} ms", dtoLoadingNanos / 1_000_000);
@@ -973,8 +997,8 @@ public class SemanticMergeEngine {
         }
 
         if (theirsDtos.isEmpty()) {
-            LOGGER.info("No theirs changelog DTOs — nothing to replay");
-            MergeTracer.trace("[RESULT] No source changes to replay — merge trivially succeeds");
+            LOGGER.info("No theirs changelog DTOs -- nothing to replay");
+            MergeTracer.trace("[RESULT] No source changes to replay -- merge trivially succeeds");
             long totalNanosEarly = System.nanoTime() - mergeStartNanos;
             return SemanticMergeResult.success(List.of(), oursDir)
                     .withTimingStats(new SemanticMergeResult.TimingStats()
@@ -984,11 +1008,12 @@ public class SemanticMergeEngine {
         }
 
         // 3. UUID-based conflict detection
+        // Skipped when called from SemanticConflictDetector (steps 1-4 already ran there).
         phaseStart = System.nanoTime();
         List<MergeConflict> conflicts = List.of();
         List<ConflictResolution> resolutions = List.of();
 
-        if (!oursDtos.isEmpty() || !theirsDtos.isEmpty()) {
+        if (!skipDirectConflictDetection && (!oursDtos.isEmpty() || !theirsDtos.isEmpty())) {
             UuidConflictDetector detector = new UuidConflictDetector();
             conflicts = detector.detectConflicts(oursDtos, theirsDtos);
 
@@ -1018,7 +1043,7 @@ public class SemanticMergeEngine {
                 }
                 resolutions = conflictResolutionProvider.resolve(conflicts);
                 theirsDtos = filterByResolutions(theirsDtos, conflicts, resolutions);
-                MergeTracer.trace("[CONFLICT] Conflicts resolved — " + theirsDtos.size()
+                MergeTracer.trace("[CONFLICT] Conflicts resolved -- " + theirsDtos.size()
                         + " DTOs remaining to replay");
                 LOGGER.info("After conflict resolution: {} DTOs to replay", theirsDtos.size());
             }
@@ -1027,9 +1052,10 @@ public class SemanticMergeEngine {
         conflictDetectionNanos = System.nanoTime() - phaseStart;
         LOGGER.info("[TIMING] Conflict detection: {} ms", conflictDetectionNanos / 1_000_000);
 
-        // 4. Load changelog DTOs grouped by transaction for per-transaction replay
+        // 4. Load changelog DTOs grouped by transaction for per-transaction replay.
+        // Exclude base changelogs here too so we replay only the source branch's net changes.
         List<List<SemanticChangeLog.ChangeDto>> theirsTransactions =
-                loadTransactionsFromDir(theirsDir);
+                loadTransactionsExcluding(theirsDir, baseChangelogPaths);
         // Apply conflict resolution filtering to each transaction
         if (!resolutions.isEmpty()) {
             final var finalConflicts = conflicts;
@@ -1118,7 +1144,7 @@ public class SemanticMergeEngine {
                 allApplied.addAll(txnChanges);
 
                 // Check indirect conflicts AFTER replay: derived(replay(A)) vs user(B)
-                // Two approaches — PropagatedChange-based (existing) and snapshot-based (robust fallback):
+                // Two approaches -- PropagatedChange-based (existing) and snapshot-based (robust fallback):
                 List<MergeConflict> txnIndirect = detectIndirectConflicts(
                         derivedCapture.getDerivedChanges(), oursDtos,
                         targetVsum.getUuidResolver());
@@ -1148,7 +1174,7 @@ public class SemanticMergeEngine {
                         MergeTracer.trace("             → " + formatConflict(indirectConflicts.get(ic)));
                     }
                 }
-                MergeTracer.trace("           [REPLAY] Transaction " + (i + 1) + " complete — "
+                MergeTracer.trace("           [REPLAY] Transaction " + (i + 1) + " complete -- "
                         + txnChanges.size() + " changes applied, "
                         + newIndirect + " indirect conflict(s), "
                         + newWarnings + " warning(s)");
@@ -1158,7 +1184,7 @@ public class SemanticMergeEngine {
                         indirectConflicts.size(), warnings.size());
             }
         } catch (Exception e) {
-            LOGGER.warn("Replay failed (guard failure — element may have been deleted): {}",
+            LOGGER.warn("Replay failed (guard failure -- element may have been deleted): {}",
                     e.getMessage());
             LOGGER.debug("Replay guard failure details", e);
             targetVsum.dispose();
@@ -1295,7 +1321,12 @@ public class SemanticMergeEngine {
         var view = selector.createView().withChangeRecordingTrait();
 
         // Resolve HierarchicalIds using the view's ResourceSet
-        ResourceSet viewRs = view.getRootObjects(EObject.class).iterator().next()
+        var rootObjs = view.getRootObjects(EObject.class);
+        if (rootObjs.isEmpty()) {
+            throw new IllegalStateException(
+                    "replayChanges: VSUM loaded from temp dir has no model root objects");
+        }
+        ResourceSet viewRs = rootObjs.iterator().next()
                 .eResource().getResourceSet();
         var idResolver = tools.vitruv.change.atomic.hid.internal.HierarchicalIdResolver.create(viewRs);
 
@@ -1326,7 +1357,7 @@ public class SemanticMergeEngine {
                 applyChangeReflectively(eChange, idResolver, hidFallback, cacheIdRemap);
             } catch (Exception e) {
                 MergeTracer.trace("[REPLAY] Failed at change " + (ci + 1) + "/" + changes.size()
-                        + ": " + eChange.getClass().getSimpleName() + " — " + e.getMessage());
+                        + ": " + eChange.getClass().getSimpleName() + " -- " + e.getMessage());
                 throw e;
             }
         }
@@ -1336,7 +1367,7 @@ public class SemanticMergeEngine {
             view.commitChanges();
         } catch (Exception e) {
             MergeTracer.trace("[REPLAY] commitChanges failed: " + e.getClass().getSimpleName()
-                    + " — " + e.getMessage());
+                    + " -- " + e.getMessage());
             throw e;
         }
     }
@@ -1354,7 +1385,7 @@ public class SemanticMergeEngine {
      *   <li>{@code RemoveEReference}: Tolerates unresolvable containers (logs and returns).
      *       The container may have been deleted by a cascade or prior change.</li>
      *   <li>{@code ReplaceSingleValuedEAttribute}: Throws {@link IllegalStateException}
-     *       if the target element cannot be resolved — this is a guard failure indicating
+     *       if the target element cannot be resolved -- this is a guard failure indicating
      *       the element was deleted on the target branch. The caller catches this and
      *       reports a {@link MergeConflict.ConflictType#REPLAY_APPLICABILITY} conflict.</li>
      * </ul>
@@ -1467,7 +1498,7 @@ public class SemanticMergeEngine {
             if (element.eClass().getEStructuralFeature(feature.getName()) == null) {
                 // Feature belongs to a subclass but element was resolved as parent type
                 // (e.g., BrakeCaliper.pistonDiameterInMM on a BrakeComponent).
-                // Treat as guard failure — the element's concrete type differs in this state.
+                // Treat as guard failure -- the element's concrete type differs in this state.
                 throw new IllegalStateException("Feature '" + feature.getName()
                         + "' is not valid on " + element.eClass().getName()
                         + " (expected " + feature.getEContainingClass().getName() + ")");
@@ -1525,7 +1556,7 @@ public class SemanticMergeEngine {
             List<MergeConflict> conflicts,
             List<ConflictResolution> resolutions) {
 
-        // UUIDs where the user chose OURS — these theirs DTOs should be skipped
+        // UUIDs where the user chose OURS -- these theirs DTOs should be skipped
         Set<String> skipUuids = resolutions.stream()
                 .filter(r -> r.choice() == ConflictResolution.Choice.OURS)
                 .map(ConflictResolution::elementUuid)
@@ -1569,6 +1600,66 @@ public class SemanticMergeEngine {
     /**
      * Loads ALL changelog DTOs from a directory, flat.
      */
+    /**
+     * Returns the set of relative paths (using forward slashes) for every JSON changelog
+     * file under {@code dir/.vitruvius/changelogs/}. Used to identify which changelog
+     * files belong to the merge base so they can be excluded when loading branch-specific DTOs.
+     */
+    private Set<String> getChangelogRelativePaths(Path dir) throws IOException {
+        Path changelogsRoot = dir.resolve(".vitruvius/changelogs");
+        if (!Files.isDirectory(changelogsRoot)) return Set.of();
+        try (Stream<Path> stream = Files.walk(changelogsRoot)) {
+            return stream.filter(p -> !Files.isDirectory(p))
+                    .filter(p -> p.toString().endsWith(".json")
+                            && p.getParent() != null
+                            && "json".equals(p.getParent().getFileName().toString()))
+                    .map(p -> dir.relativize(p).toString().replace('\\', '/'))
+                    .collect(java.util.stream.Collectors.toSet());
+        }
+    }
+
+    private List<SemanticChangeLog.ChangeDto> loadAllDtosExcluding(
+            Path dir, Set<String> excludedRelPaths) throws IOException {
+        return loadTransactionsExcluding(dir, excludedRelPaths).stream()
+                .flatMap(List::stream).toList();
+    }
+
+    /**
+     * Loads changelog DTOs grouped by transaction, skipping any JSON file whose
+     * repository-relative path appears in {@code excludedRelPaths}. This removes
+     * base-inherited changelogs so only net changes per branch are loaded.
+     */
+    private List<List<SemanticChangeLog.ChangeDto>> loadTransactionsExcluding(
+            Path dir, Set<String> excludedRelPaths) throws IOException {
+        Path changelogsRoot = dir.resolve(".vitruvius/changelogs");
+        if (!Files.isDirectory(changelogsRoot)) return List.of();
+        Gson gson = new GsonBuilder().create();
+        List<List<SemanticChangeLog.ChangeDto>> transactions = new ArrayList<>();
+        try (Stream<Path> jsonFiles = Files.walk(changelogsRoot)
+                .filter(p -> p.toString().endsWith(".json"))
+                .filter(p -> p.getParent() != null
+                        && "json".equals(p.getParent().getFileName().toString()))
+                .sorted()) {
+            for (Path jsonFile : jsonFiles.toList()) {
+                String relPath = dir.relativize(jsonFile).toString().replace('\\', '/');
+                if (excludedRelPaths.contains(relPath)) continue;
+                String json = Files.readString(jsonFile);
+                SemanticChangelogManager.ChangelogDocument doc =
+                        gson.fromJson(json, SemanticChangelogManager.ChangelogDocument.class);
+                if (doc == null || doc.fileChanges == null) continue;
+                List<SemanticChangeLog.ChangeDto> dtos = new ArrayList<>();
+                for (SemanticChangelogManager.ChangelogDocument.FileChangeInfo fc : doc.fileChanges) {
+                    if (fc.semanticChanges == null) continue;
+                    for (SemanticChangeEntry entry : fc.semanticChanges) {
+                        dtos.add(SemanticChangeEntryToChangeDtoConverter.convert(entry));
+                    }
+                }
+                if (!dtos.isEmpty()) transactions.add(dtos);
+            }
+        }
+        return transactions;
+    }
+
     private List<SemanticChangeLog.ChangeDto> loadAllDtosFromDir(Path dir) throws IOException {
         return loadTransactionsFromDir(dir).stream().flatMap(List::stream).toList();
     }
@@ -1665,48 +1756,25 @@ public class SemanticMergeEngine {
     }
 
     /**
-     * Loads stored consequential footprints from changelog JSON files in a directory.
-     * Returns one entry per transaction (changelog file), in the same order as
-     * {@link #loadTransactionsFromDir(Path)}. Entries are {@code null} if the
-     * changelog was created by older code that did not store footprints.
+     * Extension point for Tural's consequential footprint component (steps 5-8).
+     *
+     * <p>Consequential footprints represent the set of element+feature pairs that are
+     * modified by Reactions as a side effect of replaying a primary change. Storing them
+     * at commit time enables the fast path in the interleaved replay algorithm: if stored
+     * footprints are available for all transactions on both branches, the fixpoint loop
+     * can skip full model replay and use the pre-computed sets directly.
+     *
+     * <p>Capturing footprints requires {@code ChangeLogCapture} to intercept
+     * {@code ChangePropagationListener.postChangePropagation} events and record which
+     * elements were touched by Reactions. This integration is outside the scope of the
+     * current thesis. Until it is implemented, this method returns an empty list,
+     * causing the caller to fall back to empty reaction-footprint estimates.
+     *
+     * @param dir directory containing changelog files for one branch
+     * @return always empty -- footprints not yet captured
      */
     private List<Set<String>> loadStoredFootprintsFromDir(Path dir) throws IOException {
-        List<String> sortedShas = listChangelogShasSorted(dir);
-        List<Set<String>> footprints = new ArrayList<>();
-        for (String shortSha : sortedShas) {
-            // Skip changelogs with empty DTOs (matching loadTransactionsFromDir behavior)
-            List<SemanticChangeLog.ChangeDto> dtos = SemanticChangeLog.loadDtosFrom(dir, shortSha);
-            if (dtos.isEmpty()) continue;
-
-            Set<String> fp = SemanticChangeLog.loadConsequentialFootprintsFrom(dir, shortSha);
-            footprints.add(fp); // may be null (old format)
-        }
-        return footprints;
-    }
-
-    /**
-     * Lists changelog short SHAs in chronological commit order.
-     * Uses commitIndex from the JSON if available, falls back to filename sort.
-     */
-    private List<String> listChangelogShasSorted(Path dir) throws IOException {
-        Path clDir = dir.resolve(".vitruvius/semantic-changelogs");
-        if (!Files.exists(clDir)) return List.of();
-
-        record ShaWithIndex(String shortSha, int index) {}
-        List<ShaWithIndex> entries = new ArrayList<>();
-        try (var stream = Files.list(clDir)) {
-            for (Path jsonFile : stream.filter(f -> f.toString().endsWith(".changelog.json")).toList()) {
-                String shortSha = jsonFile.getFileName().toString().replace(".changelog.json", "");
-                int idx = SemanticChangeLog.loadCommitIndexFrom(dir, shortSha);
-                entries.add(new ShaWithIndex(shortSha, idx));
-            }
-        }
-        // Sort by commitIndex if available (>= 0), fall back to filename
-        entries.sort((a, b) -> {
-            if (a.index >= 0 && b.index >= 0) return Integer.compare(a.index, b.index);
-            return a.shortSha.compareTo(b.shortSha);
-        });
-        return entries.stream().map(ShaWithIndex::shortSha).toList();
+        return List.of();
     }
 
     /**
@@ -1825,7 +1893,7 @@ public class SemanticMergeEngine {
             if (elementOnB == null) continue;
 
             // Compare B's value against the base value.
-            // Only warn if the value on B DIFFERS from the base — meaning reactions on B
+            // Only warn if the value on B DIFFERS from the base -- meaning reactions on B
             // actually derived a new value. If B's value equals the base, this is just
             // an unchanged base value and A's change is a normal three-way merge application.
             EObject elementOnBase = baseUuidToElement.get(dto.affectedElementUuid);
@@ -1836,7 +1904,7 @@ public class SemanticMergeEngine {
                     var baseFeature = elementOnBase.eClass().getEStructuralFeature(dto.featureName);
                     Object valueOnBase = baseFeature != null ? elementOnBase.eGet(baseFeature) : null;
                     if (java.util.Objects.equals(valueOnB, valueOnBase)) {
-                        // Value on B is unchanged from base — not derived, skip warning
+                        // Value on B is unchanged from base -- not derived, skip warning
                         LOGGER.debug("Skipping warning for uuid={}, feature={}: value on B ({}) "
                                 + "equals base (unchanged)", dto.affectedElementUuid,
                                 dto.featureName, valueOnB);
@@ -1935,7 +2003,7 @@ public class SemanticMergeEngine {
             String footprint = entry.getKey();
             Object oldValue = entry.getValue();
 
-            // Skip footprints that were directly changed by user(A) — those are
+            // Skip footprints that were directly changed by user(A) -- those are
             // direct conflicts (already detected by UuidConflictDetector).
             if (theirsDirectFootprints.contains(footprint)) continue;
 
@@ -2023,7 +2091,7 @@ public class SemanticMergeEngine {
                     + conflict.getConflictingFeature() + "': both directions have indirect conflicts";
             case INTERLEAVING_CONFLICT -> "INTERLEAVING_CONFLICT on feature '"
                     + conflict.getConflictingFeature() + "': no commit ordering avoids indirect conflicts";
-            case REPLAY_APPLICABILITY -> "REPLAY_APPLICABILITY: replay failed — target element missing"
+            case REPLAY_APPLICABILITY -> "REPLAY_APPLICABILITY: replay failed -- target element missing"
                     + (conflict.getTheirsValue() != null ? " (" + conflict.getTheirsValue() + ")" : "");
         };
     }

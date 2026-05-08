@@ -7,6 +7,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermission;
+import java.util.List;
 import java.util.Set;
 import lombok.Getter;
 import org.apache.logging.log4j.LogManager;
@@ -195,6 +196,90 @@ public class GitHookInstaller {
     Files.writeString(gitignoreFile, existingContent + separator + templateContent,
         StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING);
     LOGGER.info("appended Vitruvius entries to existing .gitignore");
+  }
+
+  /**
+   * Writes a {@code .gitattributes} file that assigns the Vitruvius custom merge driver
+   * to the specified model file extensions. If the file already contains the Vitruvius
+   * section (detected by a guard comment) this method is a no-op so repeated calls are safe.
+   *
+   * <p>Extensions may be provided with or without a leading {@code *.} prefix -- both
+   * {@code "brakesystem"} and {@code "*.brakesystem"} produce the same output line.
+   *
+   * @param fileExtensions model file extensions to route through the Vitruvius merge driver.
+   * @throws IOException if the file cannot be written.
+   */
+  public void installGitAttributes(List<String> fileExtensions) throws IOException {
+    Path gitattributes = repositoryRoot.resolve(".gitattributes");
+    String guard = "# Vitruvius merge driver";
+
+    if (Files.exists(gitattributes)
+        && Files.readString(gitattributes).contains(guard)) {
+      LOGGER.debug(".gitattributes already has Vitruvius entries, skipping");
+      return;
+    }
+
+    var sb = new StringBuilder();
+    if (Files.exists(gitattributes)) {
+      String existing = Files.readString(gitattributes);
+      sb.append(existing);
+      if (!existing.endsWith("\n")) {
+        sb.append("\n");
+      }
+      sb.append("\n");
+    }
+
+    sb.append(guard).append("\n");
+    for (String ext : fileExtensions) {
+      String pattern = ext.startsWith("*.") ? ext : "*." + ext;
+      sb.append(pattern).append(" merge=vitruvius\n");
+    }
+
+    Files.writeString(gitattributes, sb.toString());
+    LOGGER.info("written .gitattributes with {} pattern(s)", fileExtensions.size());
+  }
+
+  /**
+   * Configures the Vitruvius custom merge driver for this repository by writing two items:
+   * <ol>
+   *   <li>A {@code [merge "vitruvius"]} section in {@code .git/config} containing the
+   *       driver command. Git invokes this command once per conflicting model file during
+   *       {@code git merge}.</li>
+   *   <li>{@code .vitruvius/merge-driver.properties} listing the fully-qualified
+   *       {@code ChangePropagationSpecification} class names that the driver loads via
+   *       reflection at runtime.</li>
+   * </ol>
+   *
+   * <p>The {@code driverCommand} should be the full invocation string that Git will use,
+   * with the standard Git merge driver placeholders {@code %O %A %B %L %P}. Example:
+   * <pre>
+   *   java -jar /path/to/vitruvius-merge-driver.jar %O %A %B %L %P
+   * </pre>
+   *
+   * @param driverCommand the Git driver command string (with %O %A %B %L %P placeholders).
+   * @param specClasses   fully-qualified class names of ChangePropagationSpecifications.
+   * @throws IOException if any file cannot be written.
+   */
+  public void installMergeDriverConfig(String driverCommand, List<String> specClasses)
+      throws IOException {
+
+    // Write [merge "vitruvius"] to .git/config via JGit StoredConfig
+    try (org.eclipse.jgit.api.Git git =
+             org.eclipse.jgit.api.Git.open(repositoryRoot.toFile())) {
+      org.eclipse.jgit.lib.StoredConfig config = git.getRepository().getConfig();
+      config.setString("merge", "vitruvius", "name", "Vitruvius semantic merge");
+      config.setString("merge", "vitruvius", "driver", driverCommand);
+      config.save();
+      LOGGER.info("wrote [merge \"vitruvius\"] driver entry to .git/config");
+    }
+
+    // Write .vitruvius/merge-driver.properties for GitMergeDriver bootstrap
+    Path vitruviusDir = repositoryRoot.resolve(".vitruvius");
+    Files.createDirectories(vitruviusDir);
+    Path propsFile = vitruviusDir.resolve("merge-driver.properties");
+    Files.writeString(propsFile,
+        "specifications=" + String.join(",", specClasses) + "\n");
+    LOGGER.info("wrote merge-driver.properties with {} spec class(es)", specClasses.size());
   }
 
   /**

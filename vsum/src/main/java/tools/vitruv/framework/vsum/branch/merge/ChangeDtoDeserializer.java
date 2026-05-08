@@ -28,7 +28,7 @@ import tools.vitruv.change.atomic.root.RootFactory;
  * Reconstructs live {@link EChange}<{@link HierarchicalId}> objects from serialized
  * {@link SemanticChangeLog.ChangeDto} entries.
  *
- * <p>Follows the same construction patterns as {@code AtomicEChangeCopier.copyOld()} —
+ * <p>Follows the same construction patterns as {@code AtomicEChangeCopier.copyOld()} --
  * creates empty EChange instances via EMF factories and sets their fields from the DTO.
  * The resulting EChanges can be passed to
  * {@code VitruviusChangeResolverFactory.forHierarchicalIds(resourceSet).resolveAndApply()}
@@ -72,7 +72,7 @@ public class ChangeDtoDeserializer {
             try {
                 changes.add(deserialize(dto));
             } catch (Exception e) {
-                LOGGER.error("Failed to deserialize DTO: {} — {}", dto, e.getMessage());
+                LOGGER.error("Failed to deserialize DTO: {} -- {}", dto, e.getMessage());
                 throw new IllegalStateException("Cannot deserialize change DTO: " + dto, e);
             }
         }
@@ -107,10 +107,19 @@ public class ChangeDtoDeserializer {
         CreateEObject<HierarchicalId> c = EobjectFactory.eINSTANCE.createCreateEObject();
         String cacheId = "cache:/" + createCounter++;
         c.setAffectedElement(new HierarchicalId(cacheId));
-        c.setAffectedEObjectType(resolveEClass(dto.affectedEObjectType));
-        // Remember mapping: original DTO ID → cache ID (for subsequent InsertEReference)
+        // affectedEObjectType is populated by Tural's serializer but not by our
+        // SemanticChangeEntryToChangeDtoConverter; fall back to affectedEClassName.
+        String typeName = dto.affectedEObjectType != null
+                ? dto.affectedEObjectType : dto.affectedEClassName;
+        c.setAffectedEObjectType(resolveEClass(typeName));
+        // Remember mapping: original DTO ID → cache ID (for subsequent InsertEReference).
+        // Store both the file-based HID and the UUID because InsertEReference.newValueId
+        // is a UUID (from SemanticChangeEntryToChangeDtoConverter), not a file HID.
         if (dto.affectedElementId != null) {
             createdElementCacheIds.put(dto.affectedElementId, cacheId);
+        }
+        if (dto.affectedElementUuid != null) {
+            createdElementCacheIds.put(dto.affectedElementUuid, cacheId);
         }
         return c;
     }

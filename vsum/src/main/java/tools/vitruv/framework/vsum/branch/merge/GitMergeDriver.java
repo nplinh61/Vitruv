@@ -61,7 +61,7 @@ public class GitMergeDriver {
     /**
      * Entry point invoked by Git's merge driver mechanism.
      *
-     * @param args {@code %O %A %B %L %P} — ancestor, ours (overwrite in place),
+     * @param args {@code %O %A %B %L %P} -- ancestor, ours (overwrite in place),
      *             theirs, conflict-marker-size, file pathname
      */
     public static void main(String[] args) {

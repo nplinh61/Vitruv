@@ -1,22 +1,6 @@
 package tools.vitruv.framework.vsum.branch.merge;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
-
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
-
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
 
 import tools.vitruv.change.atomic.EChange;
 import tools.vitruv.change.atomic.eobject.EObjectExistenceEChange;
@@ -33,256 +17,26 @@ import tools.vitruv.change.atomic.root.RemoveRootEObject;
 import tools.vitruv.change.atomic.root.RootEChange;
 
 /**
- * A semantic change log that stores the primary {@link EChange}s for a single Git commit.
+ * Container for the {@link ChangeDto} format used by the semantic merge engine.
  *
- * <p>Changes are serialized as JSON DTOs capturing change type, affected element IDs (both
- * HierarchicalId and UUID), feature names, and values. The DTOs are used both for UUID-based
- * conflict detection and for reconstructing live EChange objects via {@link ChangeDtoDeserializer}.
- *
- * <p>In addition to per-change data, the changelog optionally stores
- * <b>cascade-deleted child UUIDs</b> (via {@link ChangeDto#cascadeDeletedUuids}).
- * When a parent element is removed from a containment reference, EMF implicitly deletes
- * all contained children. Their UUIDs are captured by {@link ChangeLogCapture} at commit
- * time and attached to the parent's removal DTO during serialization in {@link #saveTo(Path)}.
- * This enables {@link UuidConflictDetector} to statically detect conflicts on
- * cascade-deleted children whose UUIDs would otherwise not appear in the changelog.
+ * <p>The canonical changelog format is written by
+ * {@link tools.vitruv.framework.vsum.branch.SemanticChangelogManager}.
+ * {@link SemanticChangeEntryToChangeDtoConverter} converts each
+ * {@link tools.vitruv.framework.vsum.branch.storage.SemanticChangeEntry} into
+ * a {@link ChangeDto} before it is passed to the engine.
  *
  * <p>Note: XMI serialization was attempted but fails because the EChange Ecore metamodel
- * defines element references via generic {@code ETypeParameter} with bounds {@code EJavaObject},
- * preventing proper cross-reference serialization of HierarchicalId objects.
- *
- * <p>Storage location: {@code .vitruvius/semantic-changelogs/<key>.changelog.json}
+ * defines element references via generic {@code ETypeParameter} with bounds
+ * {@code EJavaObject}, preventing proper cross-reference serialization of
+ * HierarchicalId objects.
  */
 public class SemanticChangeLog {
-
-    private static final Logger LOGGER = LogManager.getLogger(SemanticChangeLog.class);
-    private static final String CHANGELOG_DIR = ".vitruvius/semantic-changelogs";
-    private static final String JSON_EXTENSION = ".changelog.json";
-    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
-
-    private final String commitSha;
-    private final String branch;
-    private final List<EChange<HierarchicalId>> primaryChanges;
-    private final Map<String, String> uuidMappings; // uuid → hierarchicalId
-    private final Map<String, List<String>> cascadeDeletedUuids; // parentUuid → [childUuids]
-    private final Set<String> consequentialFootprints; // UUID#feature pairs from Reactions
-    private final boolean hasConsequentialFootprints; // true when footprints were explicitly provided
-
-    public SemanticChangeLog(String commitSha, String branch,
-                             List<EChange<HierarchicalId>> primaryChanges) {
-        this(commitSha, branch, primaryChanges, Map.of(), Map.of(), null);
-    }
-
-    public SemanticChangeLog(String commitSha, String branch,
-                             List<EChange<HierarchicalId>> primaryChanges,
-                             Map<String, String> uuidMappings) {
-        this(commitSha, branch, primaryChanges, uuidMappings, Map.of(), null);
-    }
-
-    public SemanticChangeLog(String commitSha, String branch,
-                             List<EChange<HierarchicalId>> primaryChanges,
-                             Map<String, String> uuidMappings,
-                             Map<String, List<String>> cascadeDeletedUuids) {
-        this(commitSha, branch, primaryChanges, uuidMappings, cascadeDeletedUuids, null);
-    }
-
-    /**
-     * Full constructor. Pass a non-null {@code consequentialFootprints} set (even if empty)
-     * to indicate that footprints were captured during commit. Pass {@code null} to indicate
-     * that footprints are not available (old-format changelog).
-     */
-    public SemanticChangeLog(String commitSha, String branch,
-                             List<EChange<HierarchicalId>> primaryChanges,
-                             Map<String, String> uuidMappings,
-                             Map<String, List<String>> cascadeDeletedUuids,
-                             Set<String> consequentialFootprints) {
-        this.commitSha = Objects.requireNonNull(commitSha, "commitSha must not be null");
-        this.branch = Objects.requireNonNull(branch, "branch must not be null");
-        this.primaryChanges = Collections.unmodifiableList(new ArrayList<>(primaryChanges));
-        this.uuidMappings = Map.copyOf(uuidMappings);
-        this.cascadeDeletedUuids = cascadeDeletedUuids != null
-                ? Map.copyOf(cascadeDeletedUuids) : Map.of();
-        this.hasConsequentialFootprints = consequentialFootprints != null;
-        this.consequentialFootprints = consequentialFootprints != null
-                ? Set.copyOf(consequentialFootprints) : Set.of();
-    }
-
-    public String getCommitSha() { return commitSha; }
-    public String getBranch() { return branch; }
-    public List<EChange<HierarchicalId>> getPrimaryChanges() { return primaryChanges; }
-    public Map<String, String> getUuidMappings() { return uuidMappings; }
-    public Set<String> getConsequentialFootprints() { return consequentialFootprints; }
-
-    /**
-     * Persists this change log as JSON DTOs.
-     *
-     * <p>Note: XMI serialization of EChange<HierarchicalId> was attempted but fails
-     * because the generic Element type parameter is stored as EJavaObject (not EReference)
-     * in the EMF metamodel, so HierarchicalId objects can't be serialized as cross-references.
-     * The JSON DTO format captures all essential information for both conflict detection
-     * and EChange reconstruction.
-     */
-    public void saveTo(Path repoRoot) throws IOException {
-        Path changelogDir = repoRoot.resolve(CHANGELOG_DIR);
-        Files.createDirectories(changelogDir);
-        String shortSha = commitSha.substring(0, Math.min(7, commitSha.length()));
-
-        // Determine chronological commit index (count existing changelog files)
-        int index = 0;
-        if (Files.exists(changelogDir)) {
-            try (var stream = Files.list(changelogDir)) {
-                index = (int) stream.filter(f -> f.toString().endsWith(JSON_EXTENSION)).count();
-            }
-        }
-
-        // Save JSON DTOs
-        Path jsonPath = changelogDir.resolve(shortSha + JSON_EXTENSION);
-        saveToJson(jsonPath, index);
-
-        // Save metadata
-        Path metaPath = changelogDir.resolve(shortSha + ".meta");
-        Files.writeString(metaPath, "commitSha=%s\nbranch=%s\nchangeCount=%d\n"
-                .formatted(commitSha, branch, primaryChanges.size()));
-
-        LOGGER.info("Saved semantic changelog for {} ({} changes) to {}",
-                shortSha, primaryChanges.size(), jsonPath);
-    }
-
-    /**
-     * Loads a semantic change log metadata from disk.
-     * Returns the changelog with empty primaryChanges (use loadDtosFrom for data).
-     */
-    public static SemanticChangeLog loadFrom(Path repoRoot, String commitSha) throws IOException {
-        String shortSha = commitSha.substring(0, Math.min(7, commitSha.length()));
-        Path jsonPath = repoRoot.resolve(CHANGELOG_DIR).resolve(shortSha + JSON_EXTENSION);
-
-        if (!Files.exists(jsonPath)) return null;
-
-        ChangeLogDto dto = GSON.fromJson(Files.readString(jsonPath), ChangeLogDto.class);
-        return new SemanticChangeLog(dto.commitSha, dto.branch, List.of());
-    }
-
-    /**
-     * Loads JSON DTOs from the companion changelog (for conflict detection).
-     */
-    public static List<ChangeDto> loadDtosFrom(Path repoRoot, String commitSha) throws IOException {
-        String shortSha = commitSha.substring(0, Math.min(7, commitSha.length()));
-        Path jsonPath = repoRoot.resolve(CHANGELOG_DIR).resolve(shortSha + JSON_EXTENSION);
-        if (!Files.exists(jsonPath)) return List.of();
-
-        ChangeLogDto dto = GSON.fromJson(Files.readString(jsonPath), ChangeLogDto.class);
-        return dto.changes != null ? dto.changes : List.of();
-    }
-
-    /**
-     * Loads UUID-to-HierarchicalId mappings from a changelog JSON file.
-     * Used for UUID-based element resolution during interleaving replay.
-     */
-    public static Map<String, String> loadUuidMappingsFrom(Path repoRoot, String commitSha)
-            throws IOException {
-        String shortSha = commitSha.substring(0, Math.min(7, commitSha.length()));
-        Path jsonPath = repoRoot.resolve(CHANGELOG_DIR).resolve(shortSha + JSON_EXTENSION);
-        if (!Files.exists(jsonPath)) return Map.of();
-
-        ChangeLogDto dto = GSON.fromJson(Files.readString(jsonPath), ChangeLogDto.class);
-        return dto.uuidMappings != null ? dto.uuidMappings : Map.of();
-    }
-
-    /**
-     * Loads consequential footprints from a changelog JSON file.
-     *
-     * @return {@code null} if the field is absent (old-format changelog),
-     *         or a (possibly empty) set of UUID#feature strings if present
-     */
-    public static Set<String> loadConsequentialFootprintsFrom(Path repoRoot, String commitSha)
-            throws IOException {
-        String shortSha = commitSha.substring(0, Math.min(7, commitSha.length()));
-        Path jsonPath = repoRoot.resolve(CHANGELOG_DIR).resolve(shortSha + JSON_EXTENSION);
-        if (!Files.exists(jsonPath)) return null;
-
-        ChangeLogDto dto = GSON.fromJson(Files.readString(jsonPath), ChangeLogDto.class);
-        if (dto.consequentialFootprints == null) return null; // field absent → old format
-        return new HashSet<>(dto.consequentialFootprints);
-    }
-
-    /**
-     * Loads the commit index from a changelog JSON file.
-     * Returns -1 if the field is absent (old-format changelog).
-     */
-    public static int loadCommitIndexFrom(Path repoRoot, String commitSha) throws IOException {
-        String shortSha = commitSha.substring(0, Math.min(7, commitSha.length()));
-        Path jsonPath = repoRoot.resolve(CHANGELOG_DIR).resolve(shortSha + JSON_EXTENSION);
-        if (!Files.exists(jsonPath)) return -1;
-
-        ChangeLogDto dto = GSON.fromJson(Files.readString(jsonPath), ChangeLogDto.class);
-        return dto.commitIndex;
-    }
-
-    public static boolean existsFor(Path repoRoot, String commitSha) {
-        String shortSha = commitSha.substring(0, Math.min(7, commitSha.length()));
-        return Files.exists(repoRoot.resolve(CHANGELOG_DIR).resolve(shortSha + JSON_EXTENSION));
-    }
-
-    public static Path getChangelogDirectory(Path repoRoot) {
-        return repoRoot.resolve(CHANGELOG_DIR);
-    }
-
-    // === JSON DTO Serialization ===
-
-    private void saveToJson(Path jsonPath, int commitIndex) throws IOException {
-        List<ChangeDto> dtos = new ArrayList<>();
-        for (EChange<HierarchicalId> change : primaryChanges) {
-            ChangeDto dto = ChangeDto.fromEChange(change);
-            // Enrich with UUID from mapping if available
-            if (dto.affectedElementId != null && uuidMappings.containsValue(dto.affectedElementId)) {
-                for (var entry : uuidMappings.entrySet()) {
-                    if (entry.getValue().equals(dto.affectedElementId)) {
-                        dto.affectedElementUuid = entry.getKey();
-                        break;
-                    }
-                }
-            }
-            // Enrich with cascade-deleted UUIDs if this DTO's UUID has cascade children
-            if (dto.affectedElementUuid != null
-                    && cascadeDeletedUuids.containsKey(dto.affectedElementUuid)) {
-                dto.cascadeDeletedUuids = cascadeDeletedUuids.get(dto.affectedElementUuid);
-            }
-            dtos.add(dto);
-        }
-        ChangeLogDto logDto = new ChangeLogDto();
-        logDto.commitSha = commitSha;
-        logDto.branch = branch;
-        logDto.commitIndex = commitIndex;
-        logDto.changes = dtos;
-        logDto.uuidMappings = uuidMappings.isEmpty() ? null : new HashMap<>(uuidMappings);
-        logDto.consequentialFootprints = hasConsequentialFootprints
-                ? new ArrayList<>(consequentialFootprints) : null;
-        Files.writeString(jsonPath, GSON.toJson(logDto));
-    }
-
-    @Override
-    public String toString() {
-        return "SemanticChangeLog{commit=%s, branch=%s, changes=%d}"
-                .formatted(commitSha.substring(0, Math.min(7, commitSha.length())),
-                        branch, primaryChanges.size());
-    }
-
-    // === DTOs ===
-
-    static class ChangeLogDto {
-        String commitSha;
-        String branch;
-        int commitIndex = -1; // chronological order on branch (0-based)
-        List<ChangeDto> changes;
-        Map<String, String> uuidMappings; // uuid → hierarchicalId
-        List<String> consequentialFootprints; // UUID#feature pairs from Reactions
-    }
 
     public static class ChangeDto {
         public String changeType;
         public String affectedElementId;
-        public String affectedElementUuid; // UUID for cross-branch identity
-        public String affectedEClassName;  // EClass name for feature resolution
+        public String affectedElementUuid;
+        public String affectedEClassName;
         public String featureName;
         public String oldValueId;
         public String newValueId;
@@ -309,7 +63,6 @@ public class SemanticChangeLog {
                 dto.affectedElementId = idToString(fc.getAffectedElement());
                 dto.featureName = fc.getAffectedFeature() != null
                         ? fc.getAffectedFeature().getName() : null;
-                // Capture EClass name for feature resolution during deserialization
                 if (fc.getAffectedFeature() != null && fc.getAffectedFeature().getEContainingClass() != null) {
                     dto.affectedEClassName = fc.getAffectedFeature().getEContainingClass().getName();
                 }
@@ -357,7 +110,6 @@ public class SemanticChangeLog {
         }
 
         private static String idToString(HierarchicalId id) {
-            // Use getId() not toString() to avoid the "Id(...)" wrapper
             return id != null ? id.getId() : null;
         }
 

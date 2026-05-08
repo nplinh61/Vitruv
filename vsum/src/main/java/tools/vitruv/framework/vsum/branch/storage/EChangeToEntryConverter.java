@@ -2,6 +2,7 @@ package tools.vitruv.framework.vsum.branch.storage;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
+import java.util.ArrayList;
 import java.util.List;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -92,7 +93,7 @@ public class EChangeToEntryConverter {
       return handleExistence(c, index, SemanticChangeType.ELEMENT_CREATED, "CreateEObject");
     }
     if (change instanceof DeleteEObject<?> d) {
-      return handleExistence(d, index, SemanticChangeType.ELEMENT_DELETED, "DeleteEObject");
+      return handleDelete(d, index);
     }
     if (change instanceof ReplaceSingleValuedEAttribute<?, ?> r) {
       return handleReplaceAttribute(r, index);
@@ -136,6 +137,40 @@ public class EChangeToEntryConverter {
         .hierarchicalId(resolveHierarchicalId(element))
         .changeOrigin("original")
         .build();
+  }
+
+  private SemanticChangeEntry handleDelete(DeleteEObject<?> change, int index) {
+    EObject element = (EObject) change.getAffectedElement();
+    List<String> cascadeUuids = collectCascadeUuids(element);
+    return SemanticChangeEntry.builder()
+        .index(index)
+        .changeType(SemanticChangeType.ELEMENT_DELETED)
+        .emfType("DeleteEObject")
+        .elementUuid(resolveUuid(element))
+        .eClass(formatEClass(element))
+        .hierarchicalId(resolveHierarchicalId(element))
+        .cascadeDeletedUuids(cascadeUuids.isEmpty() ? null : cascadeUuids)
+        .changeOrigin("original")
+        .build();
+  }
+
+  /**
+   * Walks {@code eAllContents()} of the given element and collects the Vitruvius UUID
+   * of every descendant whose UUID can be resolved. Called before the element is
+   * detached from the model so the containment tree is still intact.
+   */
+  private List<String> collectCascadeUuids(EObject element) {
+    List<String> uuids = new ArrayList<>();
+    if (element == null) {
+      return uuids;
+    }
+    element.eAllContents().forEachRemaining(child -> {
+      String uuid = resolveUuid(child);
+      if (uuid != null && !"unknown".equals(uuid)) {
+        uuids.add(uuid);
+      }
+    });
+    return uuids;
   }
 
   // Handle single-valued attribute changes

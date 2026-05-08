@@ -19,7 +19,7 @@ import java.util.Set;
  *   <li>Branch B also records a modification to the same feature F on the same element X</li>
  * </ul>
  *
- * <p>The detection is purely DTO-based (UUID + feature name comparison) —
+ * <p>The detection is purely DTO-based (UUID + feature name comparison) --
  * no model instances are loaded into memory, preserving the performance
  * characteristics described in the paper.
  *

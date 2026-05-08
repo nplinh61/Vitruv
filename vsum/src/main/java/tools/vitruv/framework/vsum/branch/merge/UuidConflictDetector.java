@@ -30,11 +30,11 @@ import tools.vitruv.framework.vsum.branch.merge.SemanticChangeLog.ChangeDto;
  * <h3>Deletion detection</h3>
  * "Deleted" UUIDs are extracted from three sources:
  * <ol>
- *   <li><b>Explicit {@code DeleteEObject}</b> — the UUID is directly on the DTO.</li>
- *   <li><b>{@code RemoveEReference} / {@code RemoveRootEObject}</b> — containment removal
+ *   <li><b>Explicit {@code DeleteEObject}</b> -- the UUID is directly on the DTO.</li>
+ *   <li><b>{@code RemoveEReference} / {@code RemoveRootEObject}</b> -- containment removal
  *       is a semantic deletion. The removed child's UUID is found by matching the
  *       {@code oldValueId} (HierarchicalId) against other DTOs in the same changelog.</li>
- *   <li><b>Cascade-deleted children</b> — UUIDs from {@link SemanticChangeLog.ChangeDto#cascadeDeletedUuids},
+ *   <li><b>Cascade-deleted children</b> -- UUIDs from {@link SemanticChangeLog.ChangeDto#cascadeDeletedUuids},
  *       populated at changelog capture time by {@link ChangeLogCapture} walking
  *       {@code eAllContents()} of the removed element. This covers EMF containment
  *       cascade: when a parent is removed, all children are implicitly deleted, but
@@ -161,7 +161,7 @@ public class UuidConflictDetector {
                 deleted.add(dto.affectedElementUuid);
             }
             // RemoveEReference from a containment feature removes the child element.
-            // The oldValueId contains the HierarchicalId of the removed element —
+            // The oldValueId contains the HierarchicalId of the removed element --
             // we need to find its UUID from other DTOs in the same changelog.
             if ("RemoveEReference".equals(dto.changeType) && dto.oldValueId != null) {
                 for (ChangeDto other : dtos) {

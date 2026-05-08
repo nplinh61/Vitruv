@@ -267,10 +267,17 @@ public class CommitManager {
             "Nothing to commit, no modified model files found");
       }
 
-      // perform commit
-      RevCommit revCommit = git.commit().setMessage(message).call();
+      // perform commit -- skip pre-commit and commit-msg hooks (REST path manages everything).
+      git.commit().setMessage(message).setNoVerify(true).call();
 
-      // proceed to write changelog
+      // Re-read HEAD: post-commit hook is NOT skipped by --no-verify and may amend the commit
+      // (to include VSUM state), changing the SHA. JGit waits for the hook before returning,
+      // so HEAD is already the final post-amend SHA by this point.
+      ObjectId headId = repo.resolve("HEAD");
+      RevCommit revCommit;
+      try (org.eclipse.jgit.revwalk.RevWalk walk = new org.eclipse.jgit.revwalk.RevWalk(repo)) {
+        revCommit = walk.parseCommit(headId);
+      }
       String commitSha = revCommit.getName();
       PersonIdent author = revCommit.getAuthorIdent();
       LocalDateTime authorDate = LocalDateTime.ofInstant(
@@ -374,26 +381,46 @@ public class CommitManager {
    */
   private void stageBranchMetadata(Git git, String branch, List<String> staged)
       throws IOException, GitAPIException {
-    Path metadataFile = repoRoot.resolve(METADATA_DIR).resolve(branch + ".metadata");
+    Path metadataDir = repoRoot.resolve(METADATA_DIR);
 
-    if (!Files.exists(metadataFile)) {
-      LOGGER.debug("No metadata file for branch '{}', skipping metadata staging", branch);
+    // Update lastModified timestamp for the current branch's metadata only
+    Path currentMetaFile = metadataDir.resolve(branch + ".metadata");
+    if (Files.exists(currentMetaFile)) {
+      try {
+        BranchMetadata metadata = BranchMetadata.readFrom(currentMetaFile);
+        metadata.updateLastModified();
+        metadata.writeTo(currentMetaFile);
+      } catch (Exception e) {
+        LOGGER.warn("Failed to update branch metadata lastModified (non-critical): {}",
+            e.getMessage());
+      }
+    } else {
+      LOGGER.debug("No metadata file for branch '{}', skipping lastModified update", branch);
+    }
+
+    // Stage ALL metadata files so that files created by commitMetadataFile() (which
+    // writes directly to the git ref without touching the index) stay tracked across
+    // regular commits. Without this, the next commit would drop them from its tree.
+    if (!Files.isDirectory(metadataDir)) {
       return;
     }
-    try {
-      BranchMetadata metadata = BranchMetadata.readFrom(metadataFile);
-      metadata.updateLastModified();
-      metadata.writeTo(metadataFile);
-
-      String relativePath =
-          repoRoot.relativize(metadataFile).toString().replace('\\', '/');
-      git.add().addFilepattern(relativePath).call();
-      staged.add(relativePath);
-      LOGGER.debug("Staged branch metadata with updated lastModified: {}", relativePath);
-    } catch (Exception e) {
-      // metadata update failing should not block the commit
-      LOGGER.warn("Failed to update branch metadata lastModified (non-critical): {}",
-          e.getMessage());
+    try (var stream = Files.list(metadataDir)) {
+      stream.filter(f -> f.getFileName().toString().endsWith(".metadata"))
+          .forEach(f -> {
+            String relativePath = repoRoot.relativize(f).toString().replace('\\', '/');
+            if (!staged.contains(relativePath)) {
+              try {
+                git.add().addFilepattern(relativePath).call();
+                staged.add(relativePath);
+                LOGGER.debug("Staged branch metadata: {}", relativePath);
+              } catch (GitAPIException e) {
+                LOGGER.warn("Failed to stage branch metadata '{}' (non-critical): {}",
+                    relativePath, e.getMessage());
+              }
+            }
+          });
+    } catch (IOException e) {
+      LOGGER.warn("Failed to list branch metadata directory (non-critical): {}", e.getMessage());
     }
   }
 
@@ -488,6 +515,7 @@ public class CommitManager {
       // can bleed onto other branches when the developer switches without committing.
       git.commit()
           .setMessage("[vitruvius] changelog for " + commitSha.substring(0, 7))
+          .setNoVerify(true)
           .call();
       LOGGER.info("Changelog auto-committed for {}", commitSha.substring(0, 7));
 

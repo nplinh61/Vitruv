@@ -17,7 +17,20 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.errors.GitAPIException;
+import org.eclipse.jgit.dircache.DirCache;
+import org.eclipse.jgit.dircache.DirCacheBuilder;
+import org.eclipse.jgit.dircache.DirCacheEntry;
+import org.eclipse.jgit.lib.CommitBuilder;
+import org.eclipse.jgit.lib.Constants;
+import org.eclipse.jgit.lib.FileMode;
+import org.eclipse.jgit.lib.ObjectId;
+import org.eclipse.jgit.lib.ObjectInserter;
+import org.eclipse.jgit.lib.ObjectReader;
+import org.eclipse.jgit.lib.PersonIdent;
+import org.eclipse.jgit.lib.RefUpdate;
 import org.eclipse.jgit.lib.Repository;
+import org.eclipse.jgit.revwalk.RevCommit;
+import org.eclipse.jgit.revwalk.RevWalk;
 import tools.vitruv.framework.vsum.branch.data.BranchMetadata;
 import tools.vitruv.framework.vsum.branch.data.BranchState;
 import tools.vitruv.framework.vsum.branch.data.MaturityLevel;
@@ -87,7 +100,7 @@ public class BranchManager {
       var refs = git.branchList().call();
       for (var ref : refs) {
         var name = ref.getName().replace("refs/heads/", "");
-        // Use the branch's own name as parent — consistent with the post-checkout hook,
+        // Use the branch's own name as parent -- consistent with the post-checkout hook,
         // which sets OLD_BRANCH=NEW_BRANCH for master/main (branches that predate this system).
         ensureMetadataExists(name, name);
       }
@@ -128,19 +141,28 @@ public class BranchManager {
         throw new BranchOperationException("Source branch does not exist: " + fromBranch);
       }
 
-      // create a new branch that points to the same commit as the source branch
-      git.branchCreate()
-          .setName(name)
-          .setStartPoint(sourceRef.getObjectId().getName())
-          .call();
-      LOGGER.debug("Git branch created: name='{}', startPoint='{}'",
-          name, sourceRef.getObjectId().getName());
-
-      // write metadata of the new branch
+      // write metadata of the new branch to disk first so it can be committed
       var now = LocalDateTime.now();
       var metadata = new BranchMetadata(name, BranchState.ACTIVE, fromBranch, now, now,
           MaturityLevel.DRAFT);
-      metadata.writeTo(metadataPath(name));
+      Path metaFile = metadataPath(name);
+      metadata.writeTo(metaFile);
+
+      // Commit metadata to the parent branch so the file is in the parent's tree.
+      // When the new branch is then created from the updated parent HEAD, both branches
+      // share the metadata commit as their common base, which means git checkout between
+      // them never removes the metadata file from the working directory.
+      commitMetadataFile(git, fromBranch, metaFile);
+
+      // create new branch from the UPDATED parent HEAD (which now includes the metadata file)
+      var updatedSourceRef = repo.findRef("refs/heads/" + fromBranch);
+      git.branchCreate()
+          .setName(name)
+          .setStartPoint(updatedSourceRef.getObjectId().getName())
+          .call();
+      LOGGER.debug("Git branch created: name='{}', startPoint='{}'",
+          name, updatedSourceRef.getObjectId().getName());
+
       LOGGER.info("Created branch '{}' from '{}'", name, fromBranch);
       return metadata;
 
@@ -590,5 +612,68 @@ public class BranchManager {
    */
   private Path metadataPath(String branchName) {
     return repoRoot.resolve(METADATA_DIR).resolve(branchName + ".metadata");
+  }
+
+  /**
+   * Adds a single file to a branch's committed tree using JGit's low-level object-insertion API.
+   * This advances the branch ref by one system commit without touching the working directory index
+   * or triggering any hooks. Used by {@link #createBranch} to ensure branch metadata files are
+   * present in the parent branch's tree before the new branch is forked, so that subsequent
+   * {@code git checkout} operations never remove the metadata file from disk.
+   */
+  private void commitMetadataFile(Git git, String branch, Path file) throws IOException {
+    Repository repo = git.getRepository();
+    String refName = Constants.R_HEADS + branch;
+    ObjectId headId = repo.resolve(refName);
+
+    try (ObjectInserter inserter = repo.newObjectInserter();
+         ObjectReader reader = repo.newObjectReader()) {
+
+      DirCache cache = DirCache.newInCore();
+      DirCacheBuilder builder = cache.builder();
+
+      if (headId != null) {
+        try (RevWalk rw = new RevWalk(reader)) {
+          RevCommit head = rw.parseCommit(headId);
+          builder.addTree(new byte[0], DirCacheEntry.STAGE_0, reader, head.getTree());
+        }
+      }
+
+      byte[] content = Files.readAllBytes(file);
+      ObjectId blobId = inserter.insert(Constants.OBJ_BLOB, content);
+      String relativePath = repoRoot.relativize(file).toString().replace('\\', '/');
+      DirCacheEntry entry = new DirCacheEntry(relativePath);
+      entry.setFileMode(FileMode.REGULAR_FILE);
+      entry.setObjectId(blobId);
+      builder.add(entry);
+      builder.finish();
+
+      ObjectId treeId = cache.writeTree(inserter);
+
+      CommitBuilder cb = new CommitBuilder();
+      cb.setTreeId(treeId);
+      if (headId != null) {
+        cb.setParentId(headId);
+      }
+      PersonIdent ident = new PersonIdent("Vitruvius", "vitruvius@system");
+      cb.setAuthor(ident);
+      cb.setCommitter(ident);
+      cb.setMessage("[vitruvius] Branch metadata: " + file.getFileName() + "\n");
+
+      ObjectId newCommitId = inserter.insert(cb);
+      inserter.flush();
+
+      RefUpdate ru = repo.updateRef(refName);
+      ru.setNewObjectId(newCommitId);
+      ru.setExpectedOldObjectId(headId != null ? headId : ObjectId.zeroId());
+      ru.setRefLogMessage("[vitruvius] Branch metadata", false);
+      RefUpdate.Result result = ru.update();
+
+      if (result != RefUpdate.Result.NEW && result != RefUpdate.Result.FAST_FORWARD) {
+        throw new IOException(
+            "Branch ref update for '" + branch + "' failed: " + result);
+      }
+      LOGGER.debug("Committed metadata file '{}' to branch '{}'", file.getFileName(), branch);
+    }
   }
 }

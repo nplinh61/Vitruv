@@ -9,15 +9,22 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import org.eclipse.jgit.lib.ObjectLoader;
+import org.eclipse.jgit.treewalk.TreeWalk;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.api.MergeResult;
+import org.eclipse.jgit.api.ResetCommand;
 import org.eclipse.jgit.api.errors.GitAPIException;
 import org.eclipse.jgit.lib.ObjectId;
+import org.eclipse.jgit.lib.PersonIdent;
 import org.eclipse.jgit.lib.Ref;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.merge.MergeStrategy;
+import org.eclipse.jgit.revwalk.RevCommit;
+import org.eclipse.jgit.revwalk.RevWalk;
+import org.eclipse.jgit.revwalk.filter.RevFilter;
 import tools.vitruv.framework.vsum.branch.data.BranchMetadata;
 import tools.vitruv.framework.vsum.branch.data.BranchState;
 import tools.vitruv.framework.vsum.branch.data.ModelMergeResult;
@@ -25,7 +32,13 @@ import tools.vitruv.framework.vsum.branch.data.ReplayResult;
 import tools.vitruv.framework.vsum.branch.data.ValidationResult;
 import tools.vitruv.framework.vsum.branch.exception.BranchOperationException;
 import tools.vitruv.framework.vsum.branch.handler.PostMergeHandler;
+import tools.vitruv.framework.vsum.branch.data.SemanticConflict;
+import tools.vitruv.framework.vsum.branch.merge.ConflictResolution;
+import tools.vitruv.framework.vsum.branch.merge.ConflictResolutionProvider;
+import tools.vitruv.framework.vsum.branch.merge.GitStateLoader;
+import tools.vitruv.framework.vsum.branch.merge.MergeConflict;
 import tools.vitruv.framework.vsum.branch.merge.SemanticMergeEngine;
+import tools.vitruv.framework.vsum.branch.merge.SemanticMergeResult;
 import tools.vitruv.framework.vsum.branch.util.MergeResultFile;
 import tools.vitruv.framework.vsum.branch.util.MergeTriggerFile;
 
@@ -70,8 +83,20 @@ public class MergeManager {
    * Optional merge engine for steps 5-9 of the replay pipeline. {@code null} means only
    * steps 1-3 (direct conflict detection) are performed in the semantic pre-check.
    * Set via {@link #setMergeEngine(SemanticMergeEngine)} before calling {@link #merge}.
+   *
+   * <p>When {@link #conflictResolutionProvider} is also set, this engine is additionally
+   * called to auto-resolve semantic conflicts instead of returning CONFLICTING immediately.
+   * The engine must be constructed with a matching {@link ConflictResolutionProvider}.
    */
   private SemanticMergeEngine mergeEngine;
+
+  /**
+   * When non-null, semantic conflicts trigger auto-resolution via {@link #mergeEngine}
+   * rather than returning {@link tools.vitruv.framework.vsum.branch.data.ModelMergeResult.MergeStatus#CONFLICTING}.
+   * Both this field and {@link #mergeEngine} must be set for auto-resolution to activate.
+   * Set via {@link #setConflictResolutionProvider(ConflictResolutionProvider)}.
+   */
+  private ConflictResolutionProvider conflictResolutionProvider;
 
   /**
    * Creates a new MergeManager for the Git repository at the given path.
@@ -130,6 +155,43 @@ public class MergeManager {
   }
 
   /**
+   * Enables auto conflict resolution. When set, semantic conflicts trigger
+   * {@link SemanticMergeEngine#mergeBidirectional} instead of returning CONFLICTING.
+   * Requires {@link #setMergeEngine(SemanticMergeEngine)} to also be called with an
+   * engine constructed with the same provider.
+   *
+   * @param provider the resolution strategy; must not be null.
+   */
+  public void setConflictResolutionProvider(ConflictResolutionProvider provider) {
+    this.conflictResolutionProvider = checkNotNull(provider, "provider must not be null");
+  }
+
+  /**
+   * Clears the conflict resolution provider so that subsequent merge calls return
+   * {@link tools.vitruv.framework.vsum.branch.data.ModelMergeResult.MergeStatus#CONFLICTING}
+   * instead of auto-resolving. Call this after a per-request resolution to restore the
+   * default blocking behaviour.
+   */
+  public void clearConflictResolutionProvider() {
+    this.conflictResolutionProvider = null;
+  }
+
+  /**
+   * Probes a {@link ConflictResolutionProvider} with a single dummy conflict to determine
+   * the dominant JGit merge strategy (THEIRS or OURS). Used when a resolution strategy
+   * was supplied by the caller before any actual conflicts have been analysed.
+   */
+  private static MergeStrategy jgitStrategyFor(ConflictResolutionProvider provider) {
+    List<ConflictResolution> probe = provider.resolve(
+        List.of(new MergeConflict("_", MergeConflict.ConflictType.MODIFY_MODIFY,
+                "_", null, null, null, null)));
+    if (!probe.isEmpty() && probe.get(0).choice() == ConflictResolution.Choice.THEIRS) {
+      return MergeStrategy.THEIRS;
+    }
+    return MergeStrategy.OURS;
+  }
+
+  /**
    * Merges the given source branch into the current branch using a three-way merge
    * (MG-5).
    *
@@ -181,25 +243,78 @@ public class MergeManager {
             "Cannot merge a branch into itself: " + sourceBranch);
       }
 
+      // When a resolution strategy is supplied the caller is explicitly asking to retry a
+      // conflicting merge.  The previous attempt may have left MERGE_HEAD written (by the
+      // engine-replay path or by a prior JGit merge that was never committed).  Abort that
+      // state before starting fresh so JGit does not refuse to run a new merge.
+      if (conflictResolutionProvider != null) {
+        try {
+          git.reset().setMode(ResetCommand.ResetType.HARD).call();
+        } catch (GitAPIException resetEx) {
+          LOGGER.debug("Pre-resolution hard-reset failed (non-critical): {}",
+              resetEx.getMessage());
+        }
+        java.nio.file.Files.deleteIfExists(repoRoot.resolve(".git/MERGE_HEAD"));
+      }
+
       // Semantic pre-check (MG-2, MG-3): detect direct element-level conflicts before
-      // attempting the JGit merge. If semantic conflicts are found, the merge is blocked
-      // so the developer can resolve them before the files are touched.
+      // attempting the JGit merge. If semantic conflicts are found, either auto-resolve
+      // via the engine (when both mergeEngine and conflictResolutionProvider are set) or
+      // block so the developer can resolve them before the files are touched.
       List<String> semanticConflicts = runSemanticPreCheck(sourceBranch, targetBranch);
       if (!semanticConflicts.isEmpty()) {
+        if (conflictResolutionProvider != null && mergeEngine != null) {
+          return resolveWithEngine(
+              git, sourceBranch, targetBranch, sourceRef, repo, deleteAfterMerge);
+        }
         LOGGER.warn(
-            "Semantic pre-check detected {} conflict(s) — blocking merge of '{}' into '{}'",
+            "Semantic pre-check detected {} conflict(s) -- blocking merge of '{}' into '{}'",
             semanticConflicts.size(), sourceBranch, targetBranch);
         return ModelMergeResult.conflicting(sourceBranch, targetBranch, semanticConflicts);
       }
 
+      // When a resolution provider is set the developer has already declared how to handle
+      // any conflict. Use a file-level JGit strategy (THEIRS/OURS) directly so that text
+      // conflicts on XMI model files -- which arise when both branches rename the same
+      // element via state-based diff (producing delete+create with new UUIDs that bypass
+      // semantic pre-check step 3) -- are resolved immediately without engine involvement.
+      MergeStrategy jgitStrategy = conflictResolutionProvider != null
+          ? jgitStrategyFor(conflictResolutionProvider)
+          : MergeStrategy.RECURSIVE;
+      String mergeMessage = conflictResolutionProvider != null
+          ? "Merge branch '" + sourceBranch + "' into '" + targetBranch
+              + "' [auto-resolved:" + jgitStrategy.getName() + "]"
+          : "Merge branch '" + sourceBranch + "' into '" + targetBranch + "'";
+
       MergeResult jgitResult = git.merge()
           .include(sourceRef)
-          .setStrategy(MergeStrategy.RECURSIVE)
+          .setStrategy(jgitStrategy)
           .setCommit(true)
-          .setMessage("Merge branch '" + sourceBranch + "' into '" + targetBranch + "'")
+          .setMessage(mergeMessage)
           .call();
 
       ModelMergeResult result = buildResult(jgitResult, sourceBranch, targetBranch, repo);
+
+      // If JGit RECURSIVE fails on a semantically-clean merge (0 semantic conflicts),
+      // the XMI model files cannot be merged as plain text. Fall back to engine replay:
+      // hard-reset to restore a clean working tree, then replay the source branch's
+      // EChanges onto the target VSUM so that both sides' semantic changes are preserved.
+      // Skip when conflictResolutionProvider is set -- the file-level strategy above
+      // already resolved (or will surface) any conflict without engine involvement.
+      if (result.getStatus() == ModelMergeResult.MergeStatus.CONFLICTING
+          && mergeEngine != null
+          && conflictResolutionProvider == null) {
+        LOGGER.info(
+            "JGit RECURSIVE conflicts on semantically-clean merge -- attempting engine replay");
+        try {
+          git.reset().setMode(ResetCommand.ResetType.HARD).call();
+        } catch (GitAPIException resetEx) {
+          LOGGER.warn("Hard reset after RECURSIVE failure failed: {}", resetEx.getMessage());
+        }
+        repo.writeMergeHeads(List.of(sourceRef.getObjectId()));
+        return mergeCleanWithEngineReplay(
+            git, sourceBranch, targetBranch, sourceRef, repo, deleteAfterMerge);
+      }
 
       if (!result.isSuccessful()
           || result.getStatus() == ModelMergeResult.MergeStatus.CONFLICTING) {
@@ -208,7 +323,8 @@ public class MergeManager {
       LOGGER.info("Merge result: {}", result);
 
       if (result.isSuccessful()) {
-        markAsMerged(sourceBranch);
+        markAsMerged(git, sourceBranch);
+        copyChangelogsFromSourceToTarget(git, sourceBranch, targetBranch);
         writeMergeTrigger(result, sourceBranch, targetBranch);
         if (postMergeHandler != null) {
           postMergeHandler.copyVsumFromSourceBranch(sourceBranch, targetBranch);
@@ -369,12 +485,14 @@ public class MergeManager {
   }
 
   /**
-   * Marks the source branch metadata state as MERGED (BR-9).
-   * Non-fatal if the metadata file does not exist.
+   * Marks the source branch metadata state as MERGED (BR-9) and commits the updated
+   * metadata file so the status is persisted in git.
+   * Non-fatal if the metadata file does not exist or the commit fails.
    *
+   * @param git          the open Git instance for the current repository.
    * @param sourceBranch the name of the branch to mark as merged.
    */
-  private void markAsMerged(String sourceBranch) {
+  private void markAsMerged(Git git, String sourceBranch) {
     Path metadataFile =
         repoRoot.resolve(METADATA_DIR).resolve(sourceBranch + ".metadata");
 
@@ -386,10 +504,80 @@ public class MergeManager {
       BranchMetadata metadata = BranchMetadata.readFrom(metadataFile);
       metadata.setState(BranchState.MERGED);
       metadata.writeTo(metadataFile);
+
+      String relativePath = repoRoot.relativize(metadataFile).toString().replace('\\', '/');
+      git.add().addFilepattern(relativePath).call();
+      git.commit()
+          .setMessage("[vitruvius] Branch '" + sourceBranch + "' marked as MERGED")
+          .setNoVerify(true)
+          .call();
       LOGGER.info("Branch '{}' marked as MERGED", sourceBranch);
-    } catch (IOException e) {
+    } catch (IOException | org.eclipse.jgit.api.errors.GitAPIException e) {
       LOGGER.warn("Failed to mark branch '{}' as MERGED (non-critical): {}",
           sourceBranch, e.getMessage());
+    }
+  }
+
+  /**
+   * Copies changelog JSON files from the source branch's git tree into the target branch's
+   * changelog directory on disk and commits them. This makes the merged branch's history
+   * accessible when listing changelogs for the target branch via the REST API.
+   * Non-fatal if the copy or commit fails.
+   *
+   * @param git          the open Git instance.
+   * @param sourceBranch the branch that was merged in.
+   * @param targetBranch the branch that received the merge.
+   */
+  private void copyChangelogsFromSourceToTarget(Git git, String sourceBranch, String targetBranch) {
+    try {
+      Repository repo = git.getRepository();
+      ObjectId sourceHead = repo.resolve(sourceBranch);
+      if (sourceHead == null) {
+        LOGGER.debug("Source branch '{}' not found for changelog copy", sourceBranch);
+        return;
+      }
+
+      String sourceJsonPrefix = ".vitruvius/changelogs/" + sourceBranch + "/json/";
+      Path targetJsonDir = repoRoot.resolve(".vitruvius/changelogs")
+          .resolve(targetBranch).resolve("json");
+      Files.createDirectories(targetJsonDir);
+
+      List<Path> copiedFiles = new ArrayList<>();
+      try (RevWalk rw = new RevWalk(repo);
+           TreeWalk treeWalk = new TreeWalk(repo)) {
+        RevCommit sourceCommit = rw.parseCommit(sourceHead);
+        treeWalk.addTree(sourceCommit.getTree());
+        treeWalk.setRecursive(true);
+        while (treeWalk.next()) {
+          String path = treeWalk.getPathString();
+          if (!path.startsWith(sourceJsonPrefix) || !path.endsWith(".json")) {
+            continue;
+          }
+          String fileName = path.substring(sourceJsonPrefix.length());
+          Path targetFile = targetJsonDir.resolve(fileName);
+          if (!Files.exists(targetFile)) {
+            ObjectLoader loader = repo.open(treeWalk.getObjectId(0));
+            Files.write(targetFile, loader.getBytes());
+            copiedFiles.add(targetFile);
+          }
+        }
+      }
+
+      if (!copiedFiles.isEmpty()) {
+        for (Path file : copiedFiles) {
+          String relativePath = repoRoot.relativize(file).toString().replace('\\', '/');
+          git.add().addFilepattern(relativePath).call();
+        }
+        git.commit()
+            .setMessage("[vitruvius] Import changelogs from '" + sourceBranch + "' after merge")
+            .setNoVerify(true)
+            .call();
+        LOGGER.info("Copied {} changelog(s) from '{}' to '{}'",
+            copiedFiles.size(), sourceBranch, targetBranch);
+      }
+    } catch (Exception e) {
+      LOGGER.warn("Failed to copy changelogs from '{}' to '{}' (non-critical): {}",
+          sourceBranch, targetBranch, e.getMessage());
     }
   }
 
@@ -404,7 +592,7 @@ public class MergeManager {
   private void writeMergeTrigger(
       ModelMergeResult result, String sourceBranch, String targetBranch) {
     if (restMode) {
-      LOGGER.debug("REST mode — skipping merge trigger file");
+      LOGGER.debug("REST mode -- skipping merge trigger file");
       return;
     }
     try {
@@ -432,6 +620,257 @@ public class MergeManager {
     } catch (GitAPIException e) {
       LOGGER.warn("Failed to delete source branch '{}' after merge (non-critical): {}",
           sourceBranch, e.getMessage());
+    }
+  }
+
+  /**
+   * Fallback merge path for semantically-clean merges where JGit RECURSIVE cannot merge
+   * the XMI model files as plain text (both branches modified the same XML regions).
+   *
+   * <p>Uses {@link SemanticMergeEngine#merge} to replay the source branch's EChanges onto
+   * the target branch's VSUM state, then copies the resulting model files to the working
+   * directory and commits them as a proper two-parent merge commit. MERGE_HEAD must already
+   * be set to {@code sourceRef} before this method is called.
+   */
+  private ModelMergeResult mergeCleanWithEngineReplay(
+      Git git, String sourceBranch, String targetBranch,
+      Ref sourceRef, Repository repo, boolean deleteAfterMerge)
+      throws IOException, BranchOperationException {
+
+    try {
+      // Find the common merge-base commit SHA
+      String baseSha;
+      try (RevWalk walk = new RevWalk(repo)) {
+        RevCommit oursCommit = walk.parseCommit(repo.resolve("HEAD"));
+        RevCommit theirsCommit = walk.parseCommit(sourceRef.getObjectId());
+        walk.setRevFilter(RevFilter.MERGE_BASE);
+        walk.markStart(oursCommit);
+        walk.markStart(theirsCommit);
+        RevCommit base = walk.next();
+        if (base == null) {
+          throw new BranchOperationException(
+              "Cannot find common ancestor for '" + sourceBranch
+              + "' and '" + targetBranch + "'");
+        }
+        baseSha = base.getName();
+      }
+      String oursSha = repo.resolve("HEAD").getName();
+      String theirsSha = sourceRef.getObjectId().getName();
+      LOGGER.info("Engine-replay merge: base={}, ours={}, theirs={}",
+          baseSha.substring(0, 7), oursSha.substring(0, 7), theirsSha.substring(0, 7));
+
+      // Replay source branch EChanges onto ours VSUM; returns merged state folder on success
+      tools.vitruv.framework.vsum.branch.merge.SemanticMergeResult engineResult =
+          mergeEngine.merge(baseSha, oursSha, theirsSha);
+
+      if (!engineResult.isSuccess()) {
+        LOGGER.warn("Engine replay detected unexpected conflicts for semantically-clean merge");
+        // Clear the MERGE_HEAD that was written before calling this method so the
+        // repository is left in a clean state and subsequent merge attempts can proceed.
+        try {
+          git.reset().setMode(ResetCommand.ResetType.HARD).call();
+        } catch (GitAPIException resetEx) {
+          LOGGER.warn("Hard reset after engine-replay failure failed: {}", resetEx.getMessage());
+        }
+        return ModelMergeResult.conflicting(sourceBranch, targetBranch,
+            List.of("semantic://engine-replay-conflict"));
+      }
+
+      // Overlay the merged model files onto the working directory
+      Path mergedFolder = engineResult.getMergedStateFolder();
+      if (mergedFolder != null && Files.isDirectory(mergedFolder)) {
+        copyMergedModelFiles(mergedFolder, repoRoot);
+      }
+
+      // MERGE_HEAD was written before this call so git.commit() creates a two-parent merge commit
+      PersonIdent ident = new PersonIdent("Vitruvius", "vitruvius@system");
+      git.add().addFilepattern(".").call();
+      RevCommit mergeCommit = git.commit()
+          .setAuthor(ident)
+          .setCommitter(ident)
+          .setMessage("Merge branch '" + sourceBranch + "' into '" + targetBranch
+              + "' [semantic-replay]")
+          .setNoVerify(true)
+          .call();
+
+      String sha = mergeCommit.getName();
+      LOGGER.info("Engine-replay merge commit: {}", sha.substring(0, 7));
+
+      ModelMergeResult result = ModelMergeResult.success(sourceBranch, targetBranch, sha);
+      markAsMerged(git, sourceBranch);
+      copyChangelogsFromSourceToTarget(git, sourceBranch, targetBranch);
+      writeMergeTrigger(result, sourceBranch, targetBranch);
+      if (postMergeHandler != null) {
+        postMergeHandler.copyVsumFromSourceBranch(sourceBranch, targetBranch);
+      }
+      postMergeReload.run();
+      if (deleteAfterMerge) {
+        deleteSourceBranch(git, sourceBranch);
+      }
+      return result;
+
+    } catch (GitAPIException e) {
+      throw new BranchOperationException(
+          "Engine-replay merge failed: " + e.getMessage(), e);
+    } catch (Exception e) {
+      if (e instanceof BranchOperationException boe) throw boe;
+      if (e instanceof IOException ioe) throw ioe;
+      throw new BranchOperationException(
+          "Engine-replay merge failed: " + e.getMessage(), e);
+    }
+  }
+
+  /**
+   * Copies model files from the engine's merged-state folder to the repository working
+   * directory, preserving relative paths. All files are copied except those under
+   * {@code .vitruvius/} (VSUM metadata with stale absolute URIs) and {@code .git/}
+   * (git internals). This is extension-agnostic: any model file extension is accepted,
+   * consistent with the reference implementation in {@code GitStateLoader.checkoutStateAtCommit}.
+   */
+  private void copyMergedModelFiles(Path sourceFolder, Path targetFolder) {
+    try (java.util.stream.Stream<Path> stream = Files.walk(sourceFolder)) {
+      stream.filter(p -> !Files.isDirectory(p))
+          .filter(p -> {
+            Path rel = sourceFolder.relativize(p);
+            String topLevel = rel.getName(0).toString();
+            return !topLevel.equals(".vitruvius") && !topLevel.equals(".git");
+          })
+          .forEach(p -> {
+            try {
+              Path relative = sourceFolder.relativize(p);
+              Path target = targetFolder.resolve(relative);
+              Files.createDirectories(target.getParent());
+              Files.copy(p, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+              LOGGER.debug("Merged model file copied: {}", relative);
+            } catch (IOException ex) {
+              LOGGER.warn("Failed to copy merged model file {}: {}", p, ex.getMessage());
+            }
+          });
+    } catch (IOException e) {
+      LOGGER.warn("Failed to walk merged-state folder: {}", e.getMessage());
+    }
+  }
+
+  /**
+   * Auto-resolves semantic conflicts using the registered {@link #conflictResolutionProvider}
+   * and creates a merge commit.
+   *
+   * <p>The resolution is applied at the git file level via {@link MergeStrategy}: OURS keeps
+   * the target branch's file state for conflicting model files; THEIRS accepts the source
+   * branch's file state. Non-conflicting files are three-way merged by JGit as usual.
+   * When the provider returns a mix of choices the dominant choice (majority) wins.
+   *
+   * <p>Only called when both {@link #mergeEngine} and {@link #conflictResolutionProvider}
+   * are set and conflicts have been detected by the semantic pre-check.
+   */
+  private ModelMergeResult resolveWithEngine(
+      Git git, String sourceBranch, String targetBranch,
+      Ref sourceRef, Repository repo, boolean deleteAfterMerge)
+      throws IOException, BranchOperationException {
+
+    // Re-run detector to get structured SemanticConflict objects for the provider
+    SemanticConflictDetector detector = new SemanticConflictDetector(repoRoot, mergeEngine);
+    ReplayResult analysis;
+    try {
+      analysis = detector.analyzeBranches(targetBranch, sourceBranch);
+    } catch (BranchOperationException e) {
+      LOGGER.warn("Could not re-run conflict detector for resolution; aborting: {}",
+          e.getMessage());
+      throw e;
+    }
+
+    // Convert SemanticConflict (Linh type) -> MergeConflict (Anon type) for the provider API
+    List<MergeConflict> mergeConflicts = analysis.getConflicts().stream()
+        .map(sc -> new MergeConflict(
+            sc.getElementUuid(),
+            MergeConflict.ConflictType.MODIFY_MODIFY,
+            sc.getElementUuid(),
+            sc.getFeature(),
+            null, null, null))
+        .toList();
+
+    List<ConflictResolution> resolutions = conflictResolutionProvider.resolve(mergeConflicts);
+
+    // Determine dominant strategy: count OURS vs THEIRS choices
+    long theirsCount = resolutions.stream()
+        .filter(r -> r.choice() == ConflictResolution.Choice.THEIRS)
+        .count();
+    MergeStrategy strategy = theirsCount >= (resolutions.size() - theirsCount)
+        ? MergeStrategy.THEIRS
+        : MergeStrategy.OURS;
+    LOGGER.info("Auto-resolution: {} THEIRS / {} OURS choices -- using {} strategy",
+        theirsCount, resolutions.size() - theirsCount, strategy.getName());
+
+    try {
+      // setCommit(false): let JGit do the merge but not the commit, so we can
+      // create the merge commit manually with setNoVerify(true) and avoid the
+      // pre-commit hook (VsumValidationWatcher is not active in the REST server).
+      MergeResult jgitResult = git.merge()
+          .include(sourceRef)
+          .setStrategy(strategy)
+          .setCommit(false)
+          .call();
+
+      MergeResult.MergeStatus jgitStatus = jgitResult.getMergeStatus();
+      LOGGER.info("JGit {} merge status: {}", strategy.getName(), jgitStatus);
+
+      // Fast-forward and already-up-to-date: no extra commit needed.
+      if (jgitStatus == MergeResult.MergeStatus.ALREADY_UP_TO_DATE
+          || jgitStatus == MergeResult.MergeStatus.FAST_FORWARD
+          || jgitStatus == MergeResult.MergeStatus.FAST_FORWARD_SQUASHED) {
+        ModelMergeResult result = buildResult(jgitResult, sourceBranch, targetBranch, repo);
+        markAsMerged(git, sourceBranch);
+        copyChangelogsFromSourceToTarget(git, sourceBranch, targetBranch);
+        writeMergeTrigger(result, sourceBranch, targetBranch);
+        if (postMergeHandler != null) {
+          postMergeHandler.copyVsumFromSourceBranch(sourceBranch, targetBranch);
+        }
+        postMergeReload.run();
+        if (deleteAfterMerge) {
+          deleteSourceBranch(git, sourceBranch);
+        }
+        return result;
+      }
+
+      // THEIRS/OURS always produce MERGED_NOT_COMMITTED on a normal three-way merge.
+      if (jgitStatus != MergeResult.MergeStatus.MERGED_NOT_COMMITTED) {
+        ModelMergeResult result = buildResult(jgitResult, sourceBranch, targetBranch, repo);
+        LOGGER.warn("JGit merge with strategy {} produced unexpected status: {}",
+            strategy.getName(), jgitStatus);
+        return result;
+      }
+
+      // Create the merge commit manually, bypassing pre-commit / commit-msg hooks.
+      // MERGE_HEAD is still set at this point so JGit records the two-parent commit.
+      PersonIdent ident = new PersonIdent("Vitruvius", "vitruvius@system");
+      git.add().addFilepattern(".").call();
+      RevCommit mergeCommit = git.commit()
+          .setAuthor(ident)
+          .setCommitter(ident)
+          .setMessage("Merge branch '" + sourceBranch + "' into '" + targetBranch
+              + "' [auto-resolved:" + strategy.getName() + "]")
+          .setNoVerify(true)
+          .call();
+
+      String sha = mergeCommit.getName();
+      LOGGER.info("Auto-resolved merge commit: {}", sha.substring(0, 7));
+
+      ModelMergeResult result = ModelMergeResult.success(sourceBranch, targetBranch, sha);
+      markAsMerged(git, sourceBranch);
+      copyChangelogsFromSourceToTarget(git, sourceBranch, targetBranch);
+      writeMergeTrigger(result, sourceBranch, targetBranch);
+      if (postMergeHandler != null) {
+        postMergeHandler.copyVsumFromSourceBranch(sourceBranch, targetBranch);
+      }
+      postMergeReload.run();
+      if (deleteAfterMerge) {
+        deleteSourceBranch(git, sourceBranch);
+      }
+      return result;
+
+    } catch (GitAPIException e) {
+      throw new BranchOperationException(
+          "Auto-resolved merge failed: " + e.getMessage(), e);
     }
   }
 }
