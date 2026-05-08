@@ -6,10 +6,11 @@
 # state. If validation fails the commit is blocked.
 #
 # Workflow:
-#   1. Update lastModified in branch metadata and stage it.
-#   2. Generate a unique request ID and write the validate-trigger file.
-#   3. Wait for VsumValidationWatcher to write the result file (up to 30s).
-#   4. Read the result and allow or block the commit accordingly.
+#   1. Generate a unique request ID and write the validate-trigger file.
+#   2. Wait for VsumValidationWatcher to write the result file (up to 30s).
+#      The watcher updates lastModified in branch metadata on the Java side.
+#   3. Read the result: on pass, stage the metadata file and allow the commit;
+#      on failure or timeout, block the commit.
 #
 
 set -e
@@ -21,14 +22,7 @@ COMMIT_SHA=$(git rev-parse HEAD 2>/dev/null || echo "000000000000000000000000000
 VITRUVIUS_DIR="$REPO_ROOT/.vitruvius"
 mkdir -p "$VITRUVIUS_DIR"
 
-# Update lastModified in branch metadata so it is included in this commit.
 METADATA_FILE="$VITRUVIUS_DIR/branches/$BRANCH.metadata"
-if [ -f "$METADATA_FILE" ]; then
-    COMMIT_TIMESTAMP=$(date -Iseconds 2>/dev/null || date +%Y-%m-%dT%H:%M:%S)
-    sed -i "s|\"lastModified\": \".*\"|\"lastModified\": \"$COMMIT_TIMESTAMP\"|" "$METADATA_FILE"
-    git add "$METADATA_FILE"
-    echo "Vitruvius: Updated lastModified for branch '$BRANCH'"
-fi
 
 # Generate a unique request ID so concurrent commits do not read each other's results.
 if command -v uuidgen &> /dev/null; then
@@ -64,6 +58,9 @@ while [ $WAITED -lt $MAX_WAIT ]; do
             cat "$RESULT_FILE"
             echo ""
             rm -f "$RESULT_FILE" "$RESULT_JSON"
+            if [ -f "$METADATA_FILE" ]; then
+                git add "$METADATA_FILE"
+            fi
             exit 0
         else
             echo "V-SUM validation FAILED"

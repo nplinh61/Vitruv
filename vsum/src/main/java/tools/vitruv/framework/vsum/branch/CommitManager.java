@@ -30,9 +30,12 @@ import tools.vitruv.framework.vsum.branch.data.BranchMetadata;
 import tools.vitruv.framework.vsum.branch.data.CommitOptions;
 import tools.vitruv.framework.vsum.branch.data.CommitResult;
 import tools.vitruv.framework.vsum.branch.data.CommitSummary;
+import tools.vitruv.framework.vsum.branch.data.ValidationResult;
 import tools.vitruv.framework.vsum.branch.exception.BranchOperationException;
+import tools.vitruv.framework.vsum.branch.handler.PreCommitHandler;
 import tools.vitruv.framework.vsum.branch.storage.SemanticChangeBuffer;
 import tools.vitruv.framework.vsum.branch.storage.SemanticChangelogManager;
+import tools.vitruv.framework.vsum.branch.util.MergeTriggerFile;
 import tools.vitruv.framework.vsum.branch.util.PostCommitTriggerFile;
 
 /**
@@ -68,7 +71,15 @@ public class CommitManager {
 
   private final Path repoRoot;
   private final PostCommitTriggerFile triggerFile;
+  private final MergeTriggerFile mergeTriggerFile;
   private final SemanticChangelogManager changelogManager;
+
+  /**
+   * Optional: validates the VSUM before committing when set via
+   * {@link #attachValidation}. Null in Git-only scenarios where no live VirtualModel
+   * is present.
+   */
+  private PreCommitHandler preCommitHandler;
 
   /**
    * Optional: buffer, resolver, and resource supplier provided by
@@ -99,7 +110,20 @@ public class CommitManager {
     checkArgument(Files.isDirectory(repoRoot.resolve(".git")),
         "No Git repository found at: %s", repoRoot);
     this.triggerFile = new PostCommitTriggerFile(repoRoot);
+    this.mergeTriggerFile = new MergeTriggerFile(repoRoot);
     this.changelogManager = new SemanticChangelogManager(repoRoot);
+  }
+
+  /**
+   * Attaches pre-commit VSUM validation so that {@link #commit} rejects commits when the
+   * VirtualModel is in an inconsistent state, matching the behaviour of the Git CLI
+   * pre-commit hook.
+   *
+   * @param handler the handler to use for validation, must not be null.
+   */
+  public void attachValidation(PreCommitHandler handler) {
+    this.preCommitHandler = checkNotNull(handler, "PreCommitHandler must not be null");
+    LOGGER.info("Pre-commit validation attached to CommitManager");
   }
 
   /**
@@ -249,6 +273,14 @@ public class CommitManager {
     checkArgument(!message.isBlank(), "commit message must not be blank");
     checkNotNull(options, "commit options must not be null");
 
+    if (preCommitHandler != null) {
+      ValidationResult validation = preCommitHandler.validate();
+      if (!validation.isValid()) {
+        throw new BranchOperationException(
+            "Pre-commit validation failed: " + validation.getErrors());
+      }
+    }
+
     try (Git git = Git.open(repoRoot.toFile())) {
       Repository repo = git.getRepository();
       String branch = repo.getBranch();
@@ -306,6 +338,13 @@ public class CommitManager {
               e.getMessage());
         }
       }
+
+      // Write merge trigger when the commit is a merge (two parents), matching
+      // the post-commit hook behaviour for direct Git CLI merges.
+      if (revCommit.getParentCount() >= 2) {
+        writeMergeTriggerIfNeeded(git, revCommit, commitSha, branch);
+      }
+
       return result;
 
     } catch (GitAPIException e) {
@@ -514,7 +553,7 @@ public class CommitManager {
       // Without this commit they remain as staged-but-uncommitted changes, which
       // can bleed onto other branches when the developer switches without committing.
       git.commit()
-          .setMessage("[vitruvius] changelog for " + commitSha.substring(0, 7))
+          .setMessage("[vitruvius] Semantic changelog for " + commitSha.substring(0, 7))
           .setNoVerify(true)
           .call();
       LOGGER.info("Changelog auto-committed for {}", commitSha.substring(0, 7));
@@ -537,5 +576,37 @@ public class CommitManager {
       return true;
     }
     return MODEL_PATTERN.matcher(lower).matches();
+  }
+
+  private void writeMergeTriggerIfNeeded(
+      Git git, RevCommit revCommit, String commitSha, String targetBranch) {
+    try {
+      String secondParentSha = revCommit.getParent(1).getName();
+      String sourceBranch = resolveBranchName(git, secondParentSha);
+      mergeTriggerFile.createTrigger(commitSha, sourceBranch, targetBranch);
+      LOGGER.info("Merge trigger written for commit {} ({} -> {})",
+          commitSha.substring(0, 7), sourceBranch, targetBranch);
+    } catch (IOException e) {
+      LOGGER.warn("Failed to write merge trigger (non-critical): {}", e.getMessage());
+    }
+  }
+
+  /**
+   * Finds the local branch whose tip matches the given SHA.
+   * Falls back to {@code "unknown-branch"} if no match is found or on error,
+   * consistent with the post-commit hook's {@code git name-rev} fallback.
+   */
+  private String resolveBranchName(Git git, String sha) {
+    try {
+      for (org.eclipse.jgit.lib.Ref ref : git.branchList().call()) {
+        if (ref.getObjectId() != null && ref.getObjectId().getName().equals(sha)) {
+          return org.eclipse.jgit.lib.Repository.shortenRefName(ref.getName());
+        }
+      }
+    } catch (Exception e) {
+      LOGGER.debug("Could not resolve branch name for SHA {}: {}",
+          sha.substring(0, 7), e.getMessage());
+    }
+    return "unknown-branch";
   }
 }

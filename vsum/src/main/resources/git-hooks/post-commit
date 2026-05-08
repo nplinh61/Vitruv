@@ -67,10 +67,12 @@ if [ -f "$AMEND_GUARD" ]; then
     exit 0  # amend-loop invocation; trigger is written by the original invocation below
 fi
 if [ -d "$VSUM_DIR" ]; then
-    touch "$AMEND_GUARD"
     git add "$VSUM_DIR"
-    git commit --amend --no-edit --no-verify
-    echo "Vitruvius: VSUM state for branch '$BRANCH' committed"
+    if ! git diff --cached --quiet; then
+        touch "$AMEND_GUARD"
+        git commit --amend --no-edit --no-verify
+        echo "Vitruvius: VSUM state for branch '$BRANCH' committed"
+    fi
 fi
 
 # Capture HEAD after the amend so the trigger SHA matches the actual commit in history.

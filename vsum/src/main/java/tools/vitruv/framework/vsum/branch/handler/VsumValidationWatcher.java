@@ -12,6 +12,7 @@ import java.util.List;
 import lombok.Getter;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import tools.vitruv.framework.vsum.branch.data.BranchMetadata;
 import tools.vitruv.framework.vsum.branch.data.ValidationResult;
 import tools.vitruv.framework.vsum.branch.util.ValidationResultFile;
 import tools.vitruv.framework.vsum.branch.util.ValidationTriggerFile;
@@ -242,6 +243,10 @@ public class VsumValidationWatcher {
       LOGGER.info("Validation completed in {}ms: {} (requestId='{}')",
           duration, result.isValid() ? "PASSED ✓" : "FAILED ✗", requestId);
 
+      if (result.isValid()) {
+        updateLastModified(info.getBranch());
+      }
+
       try {
         resultFile.writeResult(result, requestId);
         LOGGER.debug("Validation result files written (requestId='{}')", requestId);
@@ -278,6 +283,22 @@ public class VsumValidationWatcher {
       resultFile.writeResult(errorResult, requestId);
     } catch (Exception writeError) {
       LOGGER.error("Failed to write error result (requestId='{}')", requestId, writeError);
+    }
+  }
+
+  private void updateLastModified(String branch) {
+    Path metaFile = repositoryRoot.resolve(".vitruvius/branches/" + branch + ".metadata");
+    if (!Files.exists(metaFile)) {
+      return;
+    }
+    try {
+      BranchMetadata metadata = BranchMetadata.readFrom(metaFile);
+      metadata.updateLastModified();
+      metadata.writeTo(metaFile);
+      LOGGER.debug("Updated lastModified for branch '{}' on validation pass", branch);
+    } catch (Exception e) {
+      LOGGER.warn("Failed to update lastModified for branch '{}' (non-critical): {}",
+          branch, e.getMessage());
     }
   }
 }
