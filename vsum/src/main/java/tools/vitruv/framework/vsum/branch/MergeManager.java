@@ -627,10 +627,11 @@ public class MergeManager {
    * Fallback merge path for semantically-clean merges where JGit RECURSIVE cannot merge
    * the XMI model files as plain text (both branches modified the same XML regions).
    *
-   * <p>Uses {@link SemanticMergeEngine#merge} to replay the source branch's EChanges onto
-   * the target branch's VSUM state, then copies the resulting model files to the working
-   * directory and commits them as a proper two-parent merge commit. MERGE_HEAD must already
-   * be set to {@code sourceRef} before this method is called.
+   * <p>Uses {@link SemanticMergeEngine#mergeWithInterleaving} to find a conflict-free
+   * commit ordering across both branches, then copies the resulting model files to the
+   * working directory and commits them as a proper two-parent merge commit. This produces
+   * the same result as {@code GitMergeDriver} for the same commit triple.
+   * MERGE_HEAD must already be set to {@code sourceRef} before this method is called.
    */
   private ModelMergeResult mergeCleanWithEngineReplay(
       Git git, String sourceBranch, String targetBranch,
@@ -659,9 +660,10 @@ public class MergeManager {
       LOGGER.info("Engine-replay merge: base={}, ours={}, theirs={}",
           baseSha.substring(0, 7), oursSha.substring(0, 7), theirsSha.substring(0, 7));
 
-      // Replay source branch EChanges onto ours VSUM; returns merged state folder on success
+      // Replay source branch EChanges onto ours VSUM via interleaved ordering so the result
+      // is consistent with what GitMergeDriver produces for the same commit triple.
       tools.vitruv.framework.vsum.branch.merge.SemanticMergeResult engineResult =
-          mergeEngine.merge(baseSha, oursSha, theirsSha);
+          mergeEngine.mergeWithInterleaving(baseSha, oursSha, theirsSha);
 
       if (!engineResult.isSuccess()) {
         LOGGER.warn("Engine replay detected unexpected conflicts for semantically-clean merge");

@@ -100,6 +100,11 @@ public class VsumMergeWatcher {
         Thread.currentThread().interrupt();
       }
     }
+    try {
+      Files.deleteIfExists(lockFile);
+    } catch (IOException e) {
+      LOGGER.warn("Failed to clean up merge lock file on stop (non-critical)", e);
+    }
     LOGGER.info("V-SUM merge watcher stopped");
   }
 

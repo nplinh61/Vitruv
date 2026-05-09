@@ -7,6 +7,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermission;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import lombok.Getter;
@@ -139,8 +140,9 @@ public class GitHookInstaller {
 
   /**
    * Installs all currently supported Git hooks ({@code post-checkout}, {@code pre-commit},
-   * {@code post-merge}, and {@code post-commit}). If any installation fails the exception is
-   * propagated immediately and subsequent hooks are not installed.
+   * {@code post-merge}, and {@code post-commit}) and appends Vitruvius entries to
+   * {@code .gitignore}. Does NOT configure the merge driver; call
+   * {@link #installAll(List, String, List)} for a full project setup.
    *
    * @throws IOException if any hook cannot be installed.
    */
@@ -152,6 +154,33 @@ public class GitHookInstaller {
     installGitignore();
     LOGGER.info("installed all Git hooks ({}, {}, {}, {})",
         POST_CHECKOUT_HOOK, PRE_COMMIT_HOOK, POST_MERGE_HOOK, POST_COMMIT_HOOK);
+  }
+
+  /**
+   * Full project setup: installs all Git hooks, appends {@code .gitignore} entries,
+   * registers model file extensions in {@code .gitattributes}, and configures the
+   * Vitruvius custom merge driver in {@code .git/config} and
+   * {@code .vitruvius/merge-driver.properties}.
+   *
+   * <p>This is the single call that replaces a manual {@code setup-merge-driver.sh}
+   * script. It is idempotent: repeated calls are safe because each step checks for
+   * existing content before writing.
+   *
+   * @param fileExtensions model file extensions to route through the merge driver
+   *     (e.g. {@code List.of("brakesystem", "cad", "safety")}).
+   * @param driverCommand  the Git driver command string with {@code %O %A %B %L %P}
+   *     placeholders (e.g. {@code "java -jar /path/to/vitruvius-merge.jar %O %A %B %L %P"}).
+   * @param specClasses    fully-qualified class names of the
+   *     {@code ChangePropagationSpecification} implementations to load at merge time.
+   * @throws IOException if any step cannot write its output file.
+   */
+  public void installAll(List<String> fileExtensions, String driverCommand,
+      List<String> specClasses) throws IOException {
+    installAllHooks();
+    installGitAttributes(fileExtensions);
+    installMergeDriverConfig(driverCommand, specClasses);
+    LOGGER.info("full Vitruvius project setup complete ({} extension(s), {} spec(s))",
+        fileExtensions.size(), specClasses.size());
   }
 
   /**
@@ -320,6 +349,101 @@ public class GitHookInstaller {
    */
   public void uninstallPostCommitHook() throws IOException {
     uninstallHook(POST_COMMIT_HOOK);
+  }
+
+  /**
+   * Removes the Vitruvius section from the repository's {@code .gitattributes} file.
+   * The section is identified by the {@code # Vitruvius merge driver} guard comment that
+   * {@link #installGitAttributes(List)} writes. If no such section exists this method
+   * does nothing. The rest of the file is preserved unchanged.
+   *
+   * @throws IOException if the file cannot be read or written.
+   */
+  public void uninstallGitAttributes() throws IOException {
+    Path gitattributes = repositoryRoot.resolve(".gitattributes");
+    if (!Files.exists(gitattributes)) {
+      LOGGER.debug(".gitattributes does not exist, nothing to uninstall");
+      return;
+    }
+    String guard = "# Vitruvius merge driver";
+    String content = Files.readString(gitattributes);
+    if (!content.contains(guard)) {
+      LOGGER.debug(".gitattributes has no Vitruvius section, nothing to uninstall");
+      return;
+    }
+
+    List<String> lines = new ArrayList<>(List.of(content.split("\n", -1)));
+    int guardIndex = -1;
+    for (int i = 0; i < lines.size(); i++) {
+      if (lines.get(i).stripTrailing().equals(guard)) {
+        guardIndex = i;
+        break;
+      }
+    }
+    if (guardIndex < 0) {
+      return;
+    }
+
+    lines.remove(guardIndex);
+    while (guardIndex < lines.size() && lines.get(guardIndex).contains("merge=vitruvius")) {
+      lines.remove(guardIndex);
+    }
+    // Strip trailing blank lines left by the separator that installGitAttributes() prepended
+    while (!lines.isEmpty() && lines.get(lines.size() - 1).isBlank()) {
+      lines.remove(lines.size() - 1);
+    }
+
+    String result = String.join("\n", lines);
+    Files.writeString(gitattributes, result.isEmpty() ? "" : result + "\n");
+    LOGGER.info("removed Vitruvius section from .gitattributes");
+  }
+
+  /**
+   * Removes the Vitruvius merge driver configuration: deletes the
+   * {@code [merge "vitruvius"]} section from {@code .git/config} and deletes
+   * {@code .vitruvius/merge-driver.properties} if it exists. If the section is
+   * not present this method does nothing.
+   *
+   * @throws IOException if the config cannot be saved or the properties file cannot be deleted.
+   */
+  public void uninstallMergeDriverConfig() throws IOException {
+    try (org.eclipse.jgit.api.Git git =
+             org.eclipse.jgit.api.Git.open(repositoryRoot.toFile())) {
+      org.eclipse.jgit.lib.StoredConfig config = git.getRepository().getConfig();
+      if (config.getSections().contains("merge")
+          && config.getSubsections("merge").contains("vitruvius")) {
+        config.unsetSection("merge", "vitruvius");
+        config.save();
+        LOGGER.info("removed [merge \"vitruvius\"] from .git/config");
+      } else {
+        LOGGER.debug("no [merge \"vitruvius\"] section in .git/config, nothing to remove");
+      }
+    }
+
+    Path propsFile = repositoryRoot.resolve(".vitruvius/merge-driver.properties");
+    if (Files.deleteIfExists(propsFile)) {
+      LOGGER.info("deleted merge-driver.properties");
+    } else {
+      LOGGER.debug("merge-driver.properties did not exist, nothing to delete");
+    }
+  }
+
+  /**
+   * Full project teardown: uninstalls all Git hooks and removes the merge driver
+   * configuration ({@code .git/config} entry, {@code .vitruvius/merge-driver.properties},
+   * and the Vitruvius section from {@code .gitattributes}). The inverse of
+   * {@link #installAll(List, String, List)}.
+   *
+   * @throws IOException if any step cannot remove its target file.
+   */
+  public void uninstallAll() throws IOException {
+    uninstallPostCheckoutHook();
+    uninstallPreCommitHook();
+    uninstallPostMergeHook();
+    uninstallPostCommitHook();
+    uninstallGitAttributes();
+    uninstallMergeDriverConfig();
+    LOGGER.info("full Vitruvius project teardown complete");
   }
 
   /**

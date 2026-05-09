@@ -77,6 +77,16 @@ public class GitMergeDriver {
             Path repoRoot = findRepoRoot();
             Path cacheDir = repoRoot.resolve(CACHE_DIR);
 
+            // Evict a stale cache left by a previously-completed merge. The cache is stale
+            // when .merge-done exists but .git/MERGE_HEAD does not: the prior merge already
+            // committed and Git is now invoking the driver for a new, unrelated merge.
+            // Without this guard the driver would skip runSemanticMerge() and serve outdated
+            // files from the previous run.
+            if (isCacheStale(repoRoot, cacheDir)) {
+                LOGGER.info("Stale merge cache detected (prior merge already committed) -- evicting");
+                cleanCache(repoRoot);
+            }
+
             // Run the full merge once, cache results
             if (!Files.exists(cacheDir.resolve(CACHE_DONE_MARKER))
                     && !Files.exists(cacheDir.resolve(CACHE_CONFLICT_MARKER))) {
@@ -288,6 +298,19 @@ public class GitMergeDriver {
 
     private static String shorten(String sha) {
         return sha.length() > 7 ? sha.substring(0, 7) : sha;
+    }
+
+    /**
+     * Returns {@code true} when the merge cache holds results from a previously-completed
+     * merge and must be evicted before the current merge runs.
+     *
+     * <p>The cache is stale when {@code .merge-done} exists (a prior run finished) but
+     * {@code .git/MERGE_HEAD} does not (that merge already committed and Git is now starting
+     * a fresh merge). Package-private for unit testing.
+     */
+    static boolean isCacheStale(Path repoRoot, Path cacheDir) {
+        return Files.exists(cacheDir.resolve(CACHE_DONE_MARKER))
+                && !Files.exists(repoRoot.resolve(".git/MERGE_HEAD"));
     }
 
     /**

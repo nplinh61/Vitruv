@@ -207,6 +207,9 @@ public class BranchManager {
       if (postCheckoutHandler != null && oldBranch != null) {
         LOGGER.debug("Invoking post-checkout handler for branch switch");
         postCheckoutHandler.onBranchSwitch(oldBranch, resolvedName);
+      } else if (postCheckoutHandler == null) {
+        LOGGER.warn("No post-checkout handler configured; VSUM will not be reloaded after "
+            + "switching to branch '{}'", resolvedName);
       }
 
     } catch (GitAPIException e) {
@@ -280,6 +283,7 @@ public class BranchManager {
    * @throws BranchOperationException if the repository cannot be read.
    */
   public List<BranchMetadata> listBranches() throws BranchOperationException {
+    reconcileDeletedBranches();
     try (var git = Git.open(repoRoot.toFile())) {
 
       // list all local branch references
@@ -383,6 +387,7 @@ public class BranchManager {
    * @throws BranchOperationException if the metadata files cannot be read.
    */
   public Map<String, List<String>> getBranchTopology() throws BranchOperationException {
+    reconcileDeletedBranches();
     var metadataDir = repoRoot.resolve(METADATA_DIR);
     if (!Files.isDirectory(metadataDir)) {
       return new LinkedHashMap<>();
@@ -571,12 +576,20 @@ public class BranchManager {
   }
 
   /**
-   * Creates a metadata file for the given branch if one does not already exist.
-   * Used when a branch is first checked out via Git CLI to ensure all branches
-   * have consistent Vitruvius metadata regardless of how they were created.
+   * Creates a metadata file for the given branch if one does not already exist, then
+   * commits it into the Git trees of both {@code branchName} and {@code parentBranch}
+   * using the same low-level object-insertion approach as {@link #createBranch}. This
+   * ensures the file is tracked in Git regardless of which branch is checked out, so
+   * that a subsequent {@code git checkout} never silently removes it from disk.
    *
-   * <p>Failures are non-fatal and logged as warnings so that a metadata write
-   * error never blocks a branch switch.
+   * <p>When the caller is currently on {@code branchName}, the Git index is re-synced to
+   * the new HEAD after the low-level ref update. Without that sync, the index would be
+   * one commit behind the ref and {@code git status} would incorrectly show the metadata
+   * file as deleted. No sync is needed when committing onto a non-current branch because
+   * the index is not affected by ref updates on other branches.
+   *
+   * <p>All failures are non-fatal and logged as warnings so that a metadata write or
+   * commit error never blocks a branch switch.
    *
    * @param branchName   the name of the branch.
    * @param parentBranch the name of the branch this was branched from.
@@ -601,6 +614,67 @@ public class BranchManager {
     } catch (IOException e) {
       LOGGER.warn("Failed to create metadata for branch '{}' (non-critical): {}",
           branchName, e.getMessage());
+      return;
+    }
+
+    try (var git = Git.open(repoRoot.toFile())) {
+      var repo = git.getRepository();
+
+      var head = repo.findRef("HEAD");
+      String currentBranch = (head != null && head.isSymbolic())
+          ? Repository.shortenRefName(head.getTarget().getName())
+          : null;
+
+      commitMetadataFile(git, branchName, metadataFile);
+      if (branchName.equals(currentBranch)) {
+        rebuildIndexFromHead(repo);
+      }
+      if (!branchName.equals(parentBranch)) {
+        commitMetadataFile(git, parentBranch, metadataFile);
+      }
+      LOGGER.debug("Committed metadata for '{}' into Git tree(s) of '{}' and '{}'",
+          branchName, branchName, parentBranch);
+    } catch (IOException e) {
+      LOGGER.warn("Failed to commit metadata for branch '{}' into Git (non-critical): {}",
+          branchName, e.getMessage());
+    }
+  }
+
+  /**
+   * Walks all {@code .metadata} files in the metadata directory and marks any branch whose
+   * Git ref no longer exists as {@link BranchState#DELETED}. Only branches in state
+   * {@link BranchState#ACTIVE} are updated; {@link BranchState#MERGED} branches whose ref
+   * was removed after merging are left unchanged because MERGED is the more informative
+   * terminal state. Failures are non-fatal and logged as warnings.
+   */
+  private void reconcileDeletedBranches() {
+    Path metadataDir = repoRoot.resolve(METADATA_DIR);
+    if (!Files.isDirectory(metadataDir)) {
+      return;
+    }
+    try (var git = Git.open(repoRoot.toFile())) {
+      var repo = git.getRepository();
+      try (var stream = Files.walk(metadataDir)) {
+        stream.filter(p -> p.toString().endsWith(".metadata"))
+            .forEach(file -> {
+              try {
+                var metadata = BranchMetadata.readFrom(file);
+                if (metadata.getState() == BranchState.ACTIVE
+                    && repo.findRef("refs/heads/" + metadata.getName()) == null) {
+                  metadata.setState(BranchState.DELETED);
+                  metadata.writeTo(file);
+                  LOGGER.info("Reconciled branch '{}' as DELETED (ref no longer exists)",
+                      metadata.getName());
+                }
+              } catch (IOException e) {
+                LOGGER.warn("Failed to reconcile metadata file '{}' (non-critical): {}",
+                    file.getFileName(), e.getMessage());
+              }
+            });
+      }
+    } catch (IOException e) {
+      LOGGER.warn("Failed to open repository during branch reconciliation (non-critical): {}",
+          e.getMessage());
     }
   }
 
@@ -615,11 +689,33 @@ public class BranchManager {
   }
 
   /**
+   * Rebuilds the Git index to match the current HEAD tree. Called after a low-level ref
+   * update on the current branch so that {@code git status} remains clean. Low-level ref
+   * updates advance the HEAD commit without touching the working directory index, which
+   * would otherwise cause tracked files added in the new commit to appear as deleted.
+   */
+  private void rebuildIndexFromHead(Repository repo) throws IOException {
+    ObjectId headId = repo.resolve(Constants.HEAD);
+    if (headId == null) {
+      return;
+    }
+    try (RevWalk rw = new RevWalk(repo); ObjectReader reader = repo.newObjectReader()) {
+      RevCommit head = rw.parseCommit(headId);
+      DirCache dc = repo.lockDirCache();
+      DirCacheBuilder builder = dc.builder();
+      builder.addTree(new byte[0], DirCacheEntry.STAGE_0, reader, head.getTree());
+      builder.finish();
+      dc.write();
+      dc.commit();
+    }
+  }
+
+  /**
    * Adds a single file to a branch's committed tree using JGit's low-level object-insertion API.
    * This advances the branch ref by one system commit without touching the working directory index
-   * or triggering any hooks. Used by {@link #createBranch} to ensure branch metadata files are
-   * present in the parent branch's tree before the new branch is forked, so that subsequent
-   * {@code git checkout} operations never remove the metadata file from disk.
+   * or triggering any hooks. Used by {@link #createBranch} and {@link #ensureMetadataExists} to
+   * ensure branch metadata files are present in the Git tree of each branch, so that a subsequent
+   * {@code git checkout} never removes the metadata file from disk.
    */
   private void commitMetadataFile(Git git, String branch, Path file) throws IOException {
     Repository repo = git.getRepository();

@@ -102,9 +102,10 @@ public abstract class AbstractTriggerFile<T extends AbstractTriggerFile.TriggerI
    * <p>If the file is malformed, it is deleted so the watcher does not retry the
    * same corrupted file on the next poll cycle.
    *
-   * <p>If the file cannot be deleted after being read successfully, the trigger
-   * information is still returned and the failure is logged as a warning. The
-   * watcher will reattempt deletion on the next poll cycle.
+   * <p>If the file cannot be deleted after being read successfully, {@code null} is
+   * returned and the failure is logged as a warning. The file stays on disk and the
+   * watcher retries the full read-delete-process sequence on the next poll cycle,
+   * ensuring the trigger is processed exactly once.
    *
    * @return the parsed trigger information, or {@code null} if no valid trigger was found.
    */
@@ -130,8 +131,9 @@ public abstract class AbstractTriggerFile<T extends AbstractTriggerFile.TriggerI
         Files.delete(triggerFilePath);
         LOGGER.debug("Trigger file consumed and cleared: {}", triggerFilePath);
       } catch (IOException deleteEx) {
-        LOGGER.warn("Failed to delete trigger file '{}', will retry on next poll",
+        LOGGER.warn("Failed to delete trigger file '{}'; skipping this cycle, will retry on next poll",
             triggerFilePath, deleteEx);
+        return null;
       }
 
       return info;

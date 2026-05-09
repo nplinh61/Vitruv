@@ -63,13 +63,22 @@ VSUM_DIR="$REPO_ROOT/.vitruvius/vsum/$BRANCH"
 AMEND_GUARD="$VITRUVIUS_DIR/.amend-in-progress"
 
 if [ -f "$AMEND_GUARD" ]; then
-    rm -f "$AMEND_GUARD"
-    exit 0  # amend-loop invocation; trigger is written by the original invocation below
+    GUARD_PID=$(cat "$AMEND_GUARD" 2>/dev/null)
+    if [ -n "$GUARD_PID" ] && kill -0 "$GUARD_PID" 2>/dev/null; then
+        # Guard belongs to a live amend loop; this invocation is the recursive re-entry.
+        rm -f "$AMEND_GUARD"
+        exit 0
+    else
+        # Guard was left by a crashed process; discard it and continue normally.
+        echo "Vitruvius: WARNING - stale amend guard removed (PID $GUARD_PID is gone)." >&2
+        echo "Vitruvius: The previous commit may be missing its changelog. Re-running now." >&2
+        rm -f "$AMEND_GUARD"
+    fi
 fi
 if [ -d "$VSUM_DIR" ]; then
     git add "$VSUM_DIR"
     if ! git diff --cached --quiet; then
-        touch "$AMEND_GUARD"
+        echo $$ > "$AMEND_GUARD"
         git commit --amend --no-edit --no-verify
         echo "Vitruvius: VSUM state for branch '$BRANCH' committed"
     fi

@@ -378,4 +378,208 @@ class GitHookInstallerTest {
                     "merge driver command must match what was passed to the installer");
         }
     }
+
+    // --- installAll() (T1) ---
+
+    /**
+     * Verifies that installAll installs all four hooks, writes the .gitattributes guard
+     * section, registers the merge driver in .git/config, and creates merge-driver.properties.
+     */
+    @Test
+    @DisplayName("installAll installs all hooks and the full merge driver configuration")
+    void installAllInstallsEverything(@TempDir Path tempDir) throws Exception {
+        try (var ignored = Git.init().setDirectory(tempDir.toFile()).call()) {
+            var installer = new GitHookInstaller(tempDir);
+
+            installer.installAll(
+                    List.of("model", "xmi"),
+                    "java -jar vitruvius.jar %O %A %B %L %P",
+                    List.of("com.example.Spec"));
+
+            assertTrue(installer.areAllHooksInstalled(),
+                    "all four hooks must be installed");
+            String attrs = Files.readString(tempDir.resolve(".gitattributes"));
+            assertTrue(attrs.contains("# Vitruvius merge driver"),
+                    ".gitattributes must contain the guard comment");
+            assertTrue(attrs.contains("*.model merge=vitruvius"),
+                    ".gitattributes must map *.model to the vitruvius driver");
+            assertTrue(Files.exists(tempDir.resolve(".vitruvius/merge-driver.properties")),
+                    "merge-driver.properties must be created");
+        }
+    }
+
+    /**
+     * Verifies that calling installAll twice does not duplicate the .gitattributes guard
+     * section or any other configuration entry.
+     */
+    @Test
+    @DisplayName("installAll is idempotent -- second call adds no duplicate entries")
+    void installAllIsIdempotent(@TempDir Path tempDir) throws Exception {
+        try (var ignored = Git.init().setDirectory(tempDir.toFile()).call()) {
+            var installer = new GitHookInstaller(tempDir);
+            String driverCommand = "java -jar vitruvius.jar %O %A %B %L %P";
+
+            installer.installAll(List.of("model"), driverCommand, List.of("com.example.Spec"));
+            installer.installAll(List.of("model"), driverCommand, List.of("com.example.Spec"));
+
+            String attrs = Files.readString(tempDir.resolve(".gitattributes"));
+            long guardCount = attrs.lines()
+                    .filter(l -> l.equals("# Vitruvius merge driver"))
+                    .count();
+            assertEquals(1, guardCount,
+                    "guard comment must appear exactly once after two installAll calls");
+        }
+    }
+
+    // --- uninstallGitAttributes() (T2) ---
+
+    /**
+     * Verifies that uninstallGitAttributes removes the Vitruvius guard section from
+     * .gitattributes while leaving all other content unchanged.
+     */
+    @Test
+    @DisplayName("uninstallGitAttributes removes the Vitruvius section without touching other content")
+    void uninstallGitAttributesRemovesVitruviusSectionOnly(@TempDir Path tempDir) throws Exception {
+        try (var ignored = Git.init().setDirectory(tempDir.toFile()).call()) {
+            var installer = new GitHookInstaller(tempDir);
+            Path gitattributes = tempDir.resolve(".gitattributes");
+            Files.writeString(gitattributes, "* text=auto\n");
+
+            installer.installGitAttributes(List.of("model"));
+            installer.uninstallGitAttributes();
+
+            String content = Files.readString(gitattributes);
+            assertFalse(content.contains("# Vitruvius merge driver"),
+                    "guard comment must be removed");
+            assertFalse(content.contains("merge=vitruvius"),
+                    "merge driver patterns must be removed");
+            assertTrue(content.contains("text=auto"),
+                    "pre-existing content must be preserved");
+        }
+    }
+
+    /**
+     * Verifies that uninstallGitAttributes does nothing when the guard section is absent,
+     * and does not throw an exception.
+     */
+    @Test
+    @DisplayName("uninstallGitAttributes is a no-op when the Vitruvius section is not present")
+    void uninstallGitAttributesIsNoOpWhenSectionAbsent(@TempDir Path tempDir) throws Exception {
+        try (var ignored = Git.init().setDirectory(tempDir.toFile()).call()) {
+            var installer = new GitHookInstaller(tempDir);
+            Path gitattributes = tempDir.resolve(".gitattributes");
+            Files.writeString(gitattributes, "* text=auto\n");
+
+            assertDoesNotThrow(installer::uninstallGitAttributes);
+
+            assertEquals("* text=auto\n", Files.readString(gitattributes),
+                    "file content must be unchanged when no Vitruvius section exists");
+        }
+    }
+
+    /**
+     * Verifies that calling uninstallGitAttributes twice is safe and does not corrupt the file.
+     */
+    @Test
+    @DisplayName("uninstallGitAttributes is idempotent -- second call does not throw or corrupt the file")
+    void uninstallGitAttributesIsIdempotent(@TempDir Path tempDir) throws Exception {
+        try (var ignored = Git.init().setDirectory(tempDir.toFile()).call()) {
+            var installer = new GitHookInstaller(tempDir);
+
+            installer.installGitAttributes(List.of("model"));
+            installer.uninstallGitAttributes();
+
+            assertDoesNotThrow(installer::uninstallGitAttributes,
+                    "second uninstall call must not throw");
+        }
+    }
+
+    // --- uninstallMergeDriverConfig() (T2) ---
+
+    /**
+     * Verifies that uninstallMergeDriverConfig removes the [merge "vitruvius"] section
+     * from .git/config so that raw git merge no longer invokes the driver.
+     */
+    @Test
+    @DisplayName("uninstallMergeDriverConfig removes [merge vitruvius] from .git/config")
+    void uninstallMergeDriverConfigRemovesGitConfigSection(@TempDir Path tempDir) throws Exception {
+        try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
+            var installer = new GitHookInstaller(tempDir);
+
+            installer.installMergeDriverConfig(
+                    "java -jar vitruvius.jar %O %A %B %L %P",
+                    List.of("com.example.Spec"));
+            installer.uninstallMergeDriverConfig();
+
+            StoredConfig config = git.getRepository().getConfig();
+            config.load();
+            assertNull(config.getString("merge", "vitruvius", "driver"),
+                    "[merge vitruvius] driver entry must be absent after uninstall");
+        }
+    }
+
+    /**
+     * Verifies that uninstallMergeDriverConfig deletes merge-driver.properties.
+     */
+    @Test
+    @DisplayName("uninstallMergeDriverConfig deletes merge-driver.properties")
+    void uninstallMergeDriverConfigDeletesPropertiesFile(@TempDir Path tempDir) throws Exception {
+        try (var ignored = Git.init().setDirectory(tempDir.toFile()).call()) {
+            var installer = new GitHookInstaller(tempDir);
+
+            installer.installMergeDriverConfig(
+                    "java -jar vitruvius.jar %O %A %B %L %P",
+                    List.of("com.example.Spec"));
+            installer.uninstallMergeDriverConfig();
+
+            assertFalse(Files.exists(tempDir.resolve(".vitruvius/merge-driver.properties")),
+                    "merge-driver.properties must be deleted after uninstall");
+        }
+    }
+
+    /**
+     * Verifies that uninstallMergeDriverConfig does nothing and does not throw when
+     * the driver was never configured.
+     */
+    @Test
+    @DisplayName("uninstallMergeDriverConfig is a no-op when the driver was never configured")
+    void uninstallMergeDriverConfigIsNoOpWhenNotConfigured(@TempDir Path tempDir) throws Exception {
+        try (var ignored = Git.init().setDirectory(tempDir.toFile()).call()) {
+            var installer = new GitHookInstaller(tempDir);
+            assertDoesNotThrow(installer::uninstallMergeDriverConfig,
+                    "uninstall must not throw when nothing was configured");
+        }
+    }
+
+    // --- uninstallAll() round-trip (T2) ---
+
+    /**
+     * Verifies that uninstallAll completely reverses installAll: all hooks are removed,
+     * the .gitattributes Vitruvius section is gone, and the merge driver config is deleted.
+     */
+    @Test
+    @DisplayName("uninstallAll is the exact inverse of installAll")
+    void uninstallAllIsFullInverseOfInstallAll(@TempDir Path tempDir) throws Exception {
+        try (Git git = Git.init().setDirectory(tempDir.toFile()).call()) {
+            var installer = new GitHookInstaller(tempDir);
+            String driverCommand = "java -jar vitruvius.jar %O %A %B %L %P";
+
+            installer.installAll(List.of("model"), driverCommand, List.of("com.example.Spec"));
+            installer.uninstallAll();
+
+            assertFalse(installer.areAllHooksInstalled(),
+                    "no hooks must remain after uninstallAll");
+            Path gitattributes = tempDir.resolve(".gitattributes");
+            if (Files.exists(gitattributes)) {
+                assertFalse(Files.readString(gitattributes).contains("# Vitruvius merge driver"),
+                        "Vitruvius .gitattributes section must be removed");
+            }
+            assertFalse(Files.exists(tempDir.resolve(".vitruvius/merge-driver.properties")),
+                    "merge-driver.properties must be deleted");
+            StoredConfig config = git.getRepository().getConfig();
+            config.load();
+            assertNull(config.getString("merge", "vitruvius", "driver"),
+                    "[merge vitruvius] entry must be absent from .git/config");
+        }
+    }
 }
