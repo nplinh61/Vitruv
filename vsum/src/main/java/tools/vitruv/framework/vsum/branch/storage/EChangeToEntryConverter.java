@@ -80,8 +80,9 @@ public class EChangeToEntryConverter {
    */
   public List<SemanticChangeEntry> convert(List<EChange<EObject>> eChanges) {
     checkNotNull(eChanges, "eChanges must not be null");
+    var idx = new int[]{0};
     return eChanges.stream()
-        .map(change -> convertSingle(change, eChanges.indexOf(change)))
+        .map(change -> convertSingle(change, idx[0]++))
         .toList();
   }
 
@@ -164,12 +165,15 @@ public class EChangeToEntryConverter {
     if (element == null) {
       return uuids;
     }
-    element.eAllContents().forEachRemaining(child -> {
-      String uuid = resolveUuid(child);
-      if (uuid != null && !"unknown".equals(uuid)) {
-        uuids.add(uuid);
-      }
-    });
+    var contents = element.eAllContents();
+    if (contents != null) {
+      contents.forEachRemaining(child -> {
+        String uuid = resolveUuid(child);
+        if (uuid != null && !"unknown".equals(uuid)) {
+          uuids.add(uuid);
+        }
+      });
+    }
     return uuids;
   }
 

@@ -36,6 +36,7 @@ import tools.vitruv.framework.vsum.branch.data.BranchState;
 import tools.vitruv.framework.vsum.branch.data.MaturityLevel;
 import tools.vitruv.framework.vsum.branch.exception.BranchOperationException;
 import tools.vitruv.framework.vsum.branch.handler.PostCheckoutHandler;
+import tools.vitruv.framework.vsum.branch.util.GitNameValidator;
 
 /**
  * Manages Git-based branches for the Vitruvius. All branch operations such as creation,
@@ -154,6 +155,16 @@ public class BranchManager {
       // them never removes the metadata file from the working directory.
       commitMetadataFile(git, fromBranch, metaFile);
 
+      // Rebuild the index to match the new HEAD when fromBranch is currently checked out.
+      // commitMetadataFile uses a low-level ref update that does not touch the on-disk index,
+      // so without this sync the index would be one commit behind HEAD. A stale index causes
+      // subsequent commits (e.g. made by a freshly-opened Git instance) to build their tree
+      // from the old index, silently omitting the newly-committed metadata file.
+      String currentBranch = repo.getBranch();
+      if (fromBranch.equals(currentBranch)) {
+        rebuildIndexFromHead(repo);
+      }
+
       // create new branch from the UPDATED parent HEAD (which now includes the metadata file)
       var updatedSourceRef = repo.findRef("refs/heads/" + fromBranch);
       git.branchCreate()
@@ -231,12 +242,29 @@ public class BranchManager {
    * <p>Deleting the currently checked-out branch is not permitted, as Git itself does
    * not allow this, and it would leave the working directory in an undefined state.
    *
+   * <p>Deleting an {@code ACTIVE} (unmerged) branch is blocked by default to protect
+   * unmerged work. Pass {@code force = true} to override this check explicitly.
+   *
    * @param name the name of the branch to delete.
    *
    * @throws BranchOperationException if the branch is currently checked out, the branch
-   *     does not exist, or the Git operation fails.
+   *     is ACTIVE and {@code force} is {@code false}, or the Git operation fails.
    */
   public void deleteBranch(String name) throws BranchOperationException {
+    deleteBranch(name, false);
+  }
+
+  /**
+   * Deletes a branch by name, with optional force override for unmerged branches.
+   *
+   * @param name  the name of the branch to delete.
+   * @param force {@code true} to allow deletion of ACTIVE (unmerged) branches;
+   *              {@code false} to block with an exception instead.
+   *
+   * @throws BranchOperationException if the branch is currently checked out, blocked by
+   *     the ACTIVE guard (when {@code force} is {@code false}), or the Git operation fails.
+   */
+  public void deleteBranch(String name, boolean force) throws BranchOperationException {
     checkNotNull(name, "Branch name must not be null");
 
     try (var git = Git.open(repoRoot.toFile())) {
@@ -250,12 +278,23 @@ public class BranchManager {
             "Cannot delete the currently checked-out branch: " + name);
       }
 
+      // Refuse to delete an unmerged branch unless the caller explicitly requested force.
+      // Read metadata before touching the git ref so the check is always consistent.
+      var metadataFile = metadataPath(name);
+      if (!force && Files.exists(metadataFile)) {
+        var metadata = BranchMetadata.readFrom(metadataFile);
+        if (metadata.getState() == BranchState.ACTIVE) {
+          throw new BranchOperationException(
+              "Cannot delete unmerged branch '" + name + "': branch state is ACTIVE. "
+              + "Merge the branch first, or pass force=true to override.");
+        }
+      }
+
       // force-delete the branch reference
       git.branchDelete().setBranchNames(name).setForce(true).call();
 
       // update branch lifecycle state to DELETED rather than removing the file so that
       // the branch history and topology remain intact.
-      var metadataFile = metadataPath(name);
       if (Files.exists(metadataFile)) {
         var metadata = BranchMetadata.readFrom(metadataFile);
         metadata.setState(BranchState.DELETED);
@@ -347,13 +386,13 @@ public class BranchManager {
   }
 
   /**
-   * Resolves a branch identifier to a branch name.
+   * Validates that a branch with the given name exists in the repository and returns the
+   * name unchanged. Performs an exact Git ref lookup ({@code refs/heads/<name>}).
    *
-   * @param name a branch name.
-   * @return the resolved branch name.
+   * @param name the exact branch name to resolve.
+   * @return {@code name}, confirmed to exist as a Git branch.
    *
-   * @throws BranchOperationException if the identifier matches no branch or is ambiguous
-   *     (matches multiple branches by uid).
+   * @throws BranchOperationException if no branch with that exact name exists.
    */
   public String resolveBranchIdentifier(String name) throws BranchOperationException {
     checkNotNull(name, "Branch identifier must not be null");
@@ -401,8 +440,11 @@ public class BranchManager {
         for (var file : metadataFiles) {
           var metadata = BranchMetadata.readFrom(file);
 
-          // deleted branches are excluded from the topology
+          // deleted branches and self-referential root branches are excluded from topology
           if (metadata.getState() == BranchState.DELETED) {
+            continue;
+          }
+          if (metadata.getParent().equals(metadata.getName())) {
             continue;
           }
           topology.computeIfAbsent(metadata.getParent(), k -> new ArrayList<>())
@@ -437,25 +479,11 @@ public class BranchManager {
    */
   public void validateBranchName(String name) throws BranchOperationException {
     checkNotNull(name, "Branch name must not be null");
-
-    if (name.isBlank()) {
-      throw new BranchOperationException("Branch name must not be blank");
+    try {
+      GitNameValidator.validateFormat(name);
+    } catch (IllegalArgumentException e) {
+      throw new BranchOperationException(e.getMessage(), e);
     }
-    // Git interprets '..' as a commit range operator, so it is not valid in a branch name.
-    if (name.contains("..")) {
-      throw new BranchOperationException("Branch name must not contain '..': " + name);
-    }
-
-    // Git uses the '.lock' suffix for reference lock files; a branch with this suffix
-    // would conflict with Git internal file naming.
-    if (name.endsWith(".lock")) {
-      throw new BranchOperationException("Branch name must not end with '.lock': " + name);
-    }
-    // these characters have special meaning in Git revision syntax or on the file system.
-    if (name.chars().anyMatch(c -> " ~^:?*[\\".indexOf(c) >= 0)) {
-      throw new BranchOperationException("Branch name contains illegal characters: " + name);
-    }
-
     // check for a name collision with an existing branch reference.
     try (var git = Git.open(repoRoot.toFile())) {
       var repo = git.getRepository();
@@ -754,7 +782,8 @@ public class BranchManager {
       PersonIdent ident = new PersonIdent("Vitruvius", "vitruvius@system");
       cb.setAuthor(ident);
       cb.setCommitter(ident);
-      cb.setMessage("[vitruvius] Branch metadata: " + file.getFileName() + "\n");
+      cb.setMessage("[vitruvius] Branch metadata: " + file.getFileName()
+          + "\n\nVitruvius-System: true\n");
 
       ObjectId newCommitId = inserter.insert(cb);
       inserter.flush();

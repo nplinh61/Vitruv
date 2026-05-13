@@ -120,9 +120,15 @@ public class VersionMetadata {
             requireField(json, "createdAt", path), TIMESTAMP_FORMAT);
     String description = json.has("description")
             ? json.get("description").getAsString() : "";
-    MaturityLevel maturity = json.has("maturity") && !json.get("maturity").isJsonNull()
-            ? MaturityLevel.valueOf(json.get("maturity").getAsString())
-            : MaturityLevel.DRAFT;
+    MaturityLevel maturity = MaturityLevel.DRAFT;
+    if (json.has("maturity") && !json.get("maturity").isJsonNull()) {
+      try {
+        maturity = MaturityLevel.valueOf(json.get("maturity").getAsString());
+      } catch (IllegalArgumentException e) {
+        LOGGER.warn("Unknown maturity '{}' in {}, defaulting to DRAFT",
+                json.get("maturity").getAsString(), path);
+      }
+    }
 
     LOGGER.debug("Read version metadata from {}", path);
     return new VersionMetadata(versionId, commitSha, branch,

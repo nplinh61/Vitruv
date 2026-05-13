@@ -401,7 +401,7 @@ public class SemanticConflictDetector {
           // Filename is "<shortSha>.json"; extract the short SHA to check
           // whether this commit belongs to the set of diverging commits to load.
           String filename = path.substring(jsonDir.length());
-          String fileSha = filename.substring(0, Math.min(7, filename.length() - 5));
+          String fileSha = filename.replace(".json", "");
 
           // Skip changelogs for commits that predate the merge-base; those are
           // shared by both branches and do not represent diverging changes.

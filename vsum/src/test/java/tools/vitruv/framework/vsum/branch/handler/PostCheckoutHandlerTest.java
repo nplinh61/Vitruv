@@ -3,6 +3,7 @@ package tools.vitruv.framework.vsum.branch.handler;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import tools.vitruv.framework.vsum.VirtualModel;
+import tools.vitruv.framework.vsum.branch.BranchManager;
 import tools.vitruv.framework.vsum.branch.exception.BranchOperationException;
 
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -54,7 +55,8 @@ class PostCheckoutHandlerTest {
     @DisplayName("rejects null values for both old and new branch names")
     void handlerRejectsNullBranchNames() {
         var virtualModel = mock(VirtualModel.class);
-        var handler = new PostCheckoutHandler(virtualModel);
+        var branchManager = mock(BranchManager.class);
+        var handler = new PostCheckoutHandler(virtualModel, branchManager);
 
         assertThrows(NullPointerException.class, () -> handler.onBranchSwitch(null, "feature-vcs"), "null old branch name must be rejected");
         assertThrows(NullPointerException.class, () -> handler.onBranchSwitch("master", null), "null new branch name must be rejected");

@@ -146,10 +146,9 @@ public class PostCommitHandler {
       try (RevWalk walk = new RevWalk(git.getRepository())) {
         revCommit = walk.parseCommit(oid);
       }
-      String msg = revCommit.getShortMessage();
-      boolean system = msg.startsWith("[vitruvius]") || msg.startsWith("Vitruvius");
+      boolean system = revCommit.getFullMessage().contains("\nVitruvius-System: true");
       if (system) {
-        LOGGER.debug("Skipping system commit {} ('{}') - no changelog written", shortSha, msg);
+        LOGGER.debug("Skipping system commit {} - no changelog written", shortSha);
       }
       return system;
     } catch (Exception e) {
@@ -192,7 +191,8 @@ public class PostCommitHandler {
       // This bypasses CommitCommand so no post-commit hook runs, and the commit always
       // lands on the correct branch regardless of the current HEAD.
       commitFilesToBranch(git, branch, writtenFiles,
-          "[vitruvius] Semantic changelog for " + shortSha, author);
+          "[vitruvius] Semantic changelog for " + shortSha
+          + "\n\nVitruvius-System: true", author);
 
       LOGGER.info("Semantic changelog committed ({} file(s)) for commit {}",
           writtenFiles.size(), shortSha);

@@ -10,6 +10,13 @@ import lombok.Getter;
  * {@link tools.vitruv.framework.vsum.branch.CommitManager}.
  * Contains enough information for the post-commit changelog watcher to generate the
  * changelog entry.
+ *
+ * <p><strong>Double-commit behavior:</strong> When {@link #hasModelChanges()} is {@code true}
+ * and semantic change tracking is active (REST mode), {@code CommitManager} automatically
+ * creates a second git commit immediately after the user's commit. This second commit carries
+ * the message {@code "[vitruvius] Semantic changelog for <sha>"} and records the JSON changelog
+ * and XMI delta files alongside the user's changes. Callers should expect {@code git log} to
+ * show one extra system commit for every user commit that touches model files.
  */
 @Getter
 public class CommitResult {

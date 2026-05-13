@@ -22,12 +22,12 @@ class FileOperationTest {
      * and Git status code mapping match the declared enum values.
      */
     @Test
-    @DisplayName("All five expected operation constants are declared and round-trip through valueOf")
+    @DisplayName("All four expected operation constants are declared and round-trip through valueOf")
     void allExpectedConstantsDeclaredAndRoundTrip() {
         // the exact count matters because other classes (such as FileChange validation and changelog serialization)
         // depend on the specific set of operation types.
-        assertEquals(5, FileOperation.values().length,
-                "exactly five operation constants must be declared");
+        assertEquals(4, FileOperation.values().length,
+                "exactly four operation constants must be declared");
 
         // verify each constant by name so that any rename is caught immediately.
         assertAll(

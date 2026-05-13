@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Stream;
 import org.apache.logging.log4j.LogManager;
@@ -27,10 +28,11 @@ import org.eclipse.jgit.revwalk.RevTree;
 import org.eclipse.jgit.revwalk.RevWalk;
 import org.eclipse.jgit.treewalk.TreeWalk;
 import org.eclipse.jgit.util.io.DisabledOutputStream;
+import tools.vitruv.framework.vsum.branch.BranchManager;
 import tools.vitruv.framework.vsum.branch.data.BranchMetadata;
 import tools.vitruv.framework.vsum.branch.data.BranchState;
 import tools.vitruv.framework.vsum.branch.data.MaturityLevel;
-import tools.vitruv.framework.vsum.internal.InternalVirtualModel;
+import tools.vitruv.framework.vsum.branch.util.GitNameValidator;
 import tools.vitruv.framework.vsum.versioning.data.RollbackPreview;
 import tools.vitruv.framework.vsum.versioning.data.RollbackResult;
 import tools.vitruv.framework.vsum.versioning.data.VersionMetadata;
@@ -56,17 +58,22 @@ public class VersioningService {
   private static final String TAG_PREFIX = "refs/tags/";
 
   private final Path repoRoot;
-  private final InternalVirtualModel virtualModel;
+  private final Runnable onReload;
+  private final BranchManager branchManager;
 
   /**
-   * Creates a new VersioningService for the given repository and virtual model.
+   * Creates a new VersioningService for the given repository root, reload callback,
+   * and branch manager.
    *
-   * @param repoRoot the root directory of the Git repository.
-   * @param virtualModel the virtual model to reload after rollback.
+   * @param repoRoot      the root directory of the Git repository.
+   * @param onReload      called after a confirmed rollback to refresh the in-memory VSUM state.
+   * @param branchManager used to commit branch metadata files into the git tree when creating
+   *                      a branch from a version.
    */
-  public VersioningService(Path repoRoot, InternalVirtualModel virtualModel) {
+  public VersioningService(Path repoRoot, Runnable onReload, BranchManager branchManager) {
     this.repoRoot = checkNotNull(repoRoot, "repository root must not be null");
-    this.virtualModel = checkNotNull(virtualModel, "virtual model must not be null");
+    this.onReload = checkNotNull(onReload, "reload callback must not be null");
+    this.branchManager = checkNotNull(branchManager, "branch manager must not be null");
     checkArgument(Files.isDirectory(repoRoot.resolve(".git")),
             "No Git repository found at: %s", repoRoot);
   }
@@ -84,7 +91,7 @@ public class VersioningService {
   public VersionMetadata createVersion(String versionId, String description)
           throws VersioningException {
     checkNotNull(versionId, "version ID must not be null");
-    checkArgument(!versionId.isBlank(), "version ID must not be blank");
+    validateTagName(versionId);
     try (Git git = Git.open(repoRoot.toFile())) {
       Repository repo = git.getRepository();
 
@@ -102,21 +109,26 @@ public class VersioningService {
       String commitSha = headId.getName();
       // Read author info from Git config - same as regular git tag behavior
       PersonIdent tagger = new PersonIdent(repo);
-      // Create annotated tag - stores tagger, date, message in Git object
-      String tagMessage = description
-              != null && !description.isBlank()
+      String tagMessage = description != null && !description.isBlank()
               ? description : "Version " + versionId;
-      git.tag().setName(versionId).setMessage(tagMessage).setAnnotated(true).call();
-      LOGGER.info("Created annotated tag '{}' at commit {} on branch '{}'",
-              versionId, commitSha.substring(0, 7), branch);
-      // Build and persist version metadata
-      LocalDateTime createdAt = LocalDateTime.ofInstant(tagger.getWhen().toInstant(), 
+      // Build and persist version metadata BEFORE tagging so the tag points to
+      // the commit that includes the metadata file (tag == HEAD after this method).
+      LocalDateTime createdAt = LocalDateTime.ofInstant(tagger.getWhen().toInstant(),
               ZoneId.systemDefault());
       VersionMetadata metadata = new VersionMetadata(versionId, commitSha, branch, tagger.getName(),
               tagger.getEmailAddress(), createdAt, description != null ? description : "",
               MaturityLevel.DRAFT);
-      metadata.writeTo(versionMetadataPath(versionId));
-      LOGGER.info("Version metadata written for '{}'", versionId);
+      Path metaPath = versionMetadataPath(versionId);
+      metadata.writeTo(metaPath);
+      String relPath = repoRoot.relativize(metaPath).toString().replace('\\', '/');
+      git.add().addFilepattern(relPath).call();
+      git.commit()
+          .setMessage("[vitruvius] Version metadata: " + versionId + "\n\nVitruvius-System: true\n")
+          .call();
+      // Create annotated tag on the new HEAD (which now includes the metadata file).
+      git.tag().setName(versionId).setMessage(tagMessage).setAnnotated(true).call();
+      LOGGER.info("Created annotated tag '{}' at commit {} on branch '{}'",
+              versionId, commitSha.substring(0, 7), branch);
       return metadata;
     } catch (GitAPIException e) {
       throw new VersioningException("Failed to create version tag '" + versionId 
@@ -149,7 +161,7 @@ public class VersioningService {
         }
       }
       // Sort newest first by createdAt
-      versions.sort((a, b) -> b.getCreatedAt().compareTo(a.getCreatedAt()));
+      versions.sort(Comparator.comparing(VersionMetadata::getCreatedAt).reversed());
       LOGGER.debug("Listed {} version(s)", versions.size());
       return versions;
     } catch (IOException e) {
@@ -228,6 +240,9 @@ public class VersioningService {
       Repository repo = git.getRepository();
       // Resolve current HEAD
       ObjectId headId = repo.resolve("HEAD");
+      if (headId == null) {
+        throw new VersioningException("Repository has no commits");
+      }
       // Resolve target commit from tag
       ObjectId targetId = repo.resolve(versionId + "^{commit}");
       if (targetId == null) {
@@ -244,7 +259,7 @@ public class VersioningService {
       // Collect files that will change via git diff
       List<String> filesToChange = computeChangedFiles(git, repo, targetId, headId);
       String branch = repo.getBranch();
-      String currentHeadSha = headId != null ? headId.getName() : "";
+      String currentHeadSha = headId.getName();
       // Check for uncommitted changes, only consider modified/deleted tracked files, not untracked:
       var status = git.status().call();
       boolean hasUncommittedChanges = !status.getModified().isEmpty()
@@ -279,6 +294,11 @@ public class VersioningService {
    */
   public RollbackResult confirmRollback(RollbackPreview preview) throws VersioningException {
     checkNotNull(preview, "rollback preview must not be null");
+    if (preview.isHasUncommittedChanges()) {
+      throw new VersioningException(
+          "Rollback aborted: uncommitted changes would be permanently lost. "
+          + "Commit or stash them first.");
+    }
     VersionMetadata targetVersion = preview.getTargetVersion();
     LOGGER.info("Confirming rollback to version '{}' at commit {}", targetVersion.getVersionId(),
             targetVersion.getCommitSha().substring(0, 7));
@@ -294,12 +314,13 @@ public class VersioningService {
       // Execute git reset --hard <targetCommit>
       git.reset().setMode(org.eclipse.jgit.api.ResetCommand.ResetType.HARD)
               .setRef(targetId.getName()).call();
-      String newHeadSha = repo.resolve("HEAD").getName();
+      ObjectId newHead = repo.resolve("HEAD");
+      String newHeadSha = newHead != null ? newHead.getName() : "unknown";
       LOGGER.info("Reset complete, new HEAD: {}", newHeadSha.substring(0, 7));
       // Reload VSUM to reflect restored model state
       // Same path as post-checkout reload - discards in-memory state and re-reads disk
       try {
-        virtualModel.reload();
+        onReload.run();
         LOGGER.info("VSUM reloaded successfully after rollback");
         return RollbackResult.success(targetVersion, newHeadSha);
       } catch (Exception e) {
@@ -329,21 +350,20 @@ public class VersioningService {
     if (!Files.exists(metadataFile)) {
       throw new VersioningException("Version not found: " + versionId);
     }
+    // Delete the metadata file first — recoverable if this fails (version remains intact).
+    try {
+      Files.delete(metadataFile);
+    } catch (IOException e) {
+      throw new VersioningException("Failed to delete version metadata: " + e.getMessage(), e);
+    }
     // Delete the Git tag (non-fatal if already gone).
     try (Git git = Git.open(repoRoot.toFile())) {
       git.tagDelete().setTags(versionId).call();
-      LOGGER.debug("Deleted Git tag '{}'", versionId);
+      LOGGER.info("Deleted version '{}'", versionId);
     } catch (GitAPIException e) {
       LOGGER.warn("Could not delete Git tag '{}' (non-critical): {}", versionId, e.getMessage());
     } catch (IOException e) {
       LOGGER.warn("Could not open repository to delete tag (non-critical): {}", e.getMessage());
-    }
-    // Delete the metadata file.
-    try {
-      Files.delete(metadataFile);
-      LOGGER.info("Deleted version '{}'", versionId);
-    } catch (IOException e) {
-      throw new VersioningException("Failed to delete version metadata: " + e.getMessage(), e);
     }
   }
 
@@ -388,6 +408,7 @@ public class VersioningService {
       BranchMetadata metadata = new BranchMetadata(branchName,
               BranchState.ACTIVE, version.getBranch(), now, now, MaturityLevel.DRAFT);
       metadata.writeTo(repoRoot.resolve(BRANCHES_DIR).resolve(branchName + ".metadata"));
+      branchManager.ensureMetadataExists(branchName, version.getBranch());
 
       LOGGER.info("Branch '{}' created from version '{}' with V-SUM state from commit {}",
               branchName, versionId, version.getCommitSha().substring(0, 7));
@@ -426,18 +447,19 @@ public class VersioningService {
     return changed;
   }
 
+  private void validateTagName(String versionId) throws VersioningException {
+    try {
+      GitNameValidator.validateTagFormat(versionId);
+    } catch (IllegalArgumentException e) {
+      throw new VersioningException(e.getMessage(), e);
+    }
+  }
+
   private void validateBranchName(String name) throws VersioningException {
-    if (name.isBlank()) {
-      throw new VersioningException("Branch name must not be blank");
-    }
-    if (name.contains("..")) {
-      throw new VersioningException("Branch name must not contain '..': " + name);
-    }
-    if (name.endsWith(".lock")) {
-      throw new VersioningException("Branch name must not end with '.lock': " + name);
-    }
-    if (name.chars().anyMatch(c -> " ~^:?*[\\".indexOf(c) >= 0)) {
-      throw new VersioningException("Branch name contains illegal characters: " + name);
+    try {
+      GitNameValidator.validateFormat(name);
+    } catch (IllegalArgumentException e) {
+      throw new VersioningException(e.getMessage(), e);
     }
     try (Git git = Git.open(repoRoot.toFile())) {
       if (git.getRepository().findRef("refs/heads/" + name) != null) {
@@ -448,22 +470,12 @@ public class VersioningService {
     }
   }
 
-  /**
-   * Encodes a Git branch name for use as a single filesystem path segment.
-   * Replaces '/' with '__' so branches like 'feature/auth' map to a single
-   * directory level instead of a subdirectory, keeping all branch vsum paths
-   * at the same depth and preserving relative URI correctness in EMF resources.
-   */
-  private static String encodeBranchForPath(String branchName) {
-    return branchName.replace("/", "__");
-  }
-
   private void extractVsumFromCommit(Repository repo, RevCommit commit,
                                      String sourceBranch, String targetBranch)
           throws IOException {
     RevTree tree = commit.getTree();
-    String vsumPrefix = VSUM_BASE_DIR + "/" + encodeBranchForPath(sourceBranch) + "/";
-    Path targetVsumDir = repoRoot.resolve(VSUM_BASE_DIR).resolve(encodeBranchForPath(targetBranch));
+    String vsumPrefix = VSUM_BASE_DIR + "/" + sourceBranch + "/";
+    Path targetVsumDir = repoRoot.resolve(VSUM_BASE_DIR).resolve(targetBranch);
     Files.createDirectories(targetVsumDir);
 
     int extracted = 0;

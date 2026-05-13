@@ -359,6 +359,12 @@ public class CommitManager {
    * Files in {@link CommitOptions#getExcludeFiles()} are skipped.
    * Files in {@link CommitOptions#getAdditionalFiles()} are staged in addition.
    *
+   * <p>Conflicting files (those with unresolved git conflict markers) are intentionally
+   * included as staging candidates so that a caller who has manually resolved semantic
+   * conflicts can commit the resolution via the normal commit path. The caller is
+   * responsible for ensuring all conflict markers have been removed before invoking
+   * this method.
+   *
    * @param git     the open Git instance.
    * @param options staging options.
    * @return list of relative paths of all staged files.
@@ -373,6 +379,7 @@ public class CommitManager {
     candidates.addAll(status.getModified());
     candidates.addAll(status.getUntracked());
     candidates.addAll(status.getMissing());
+    // Intentional: allows committing a manually resolved conflict (see Javadoc).
     candidates.addAll(status.getConflicting());
     List<String> staged = new ArrayList<>();
     // Resolve excluded paths to relative strings for comparison
@@ -480,23 +487,11 @@ public class CommitManager {
       LOGGER.debug("No V-SUM state directory for branch '{}', skipping", branch);
       return;
     }
-    try (var stream = Files.walk(vsumDir)) {
-      stream.filter(Files::isRegularFile).forEach(file -> {
-        String relativePath = repoRoot.relativize(file).toString().replace('\\', '/');
-        if (!staged.contains(relativePath)) {
-          try {
-            git.add().addFilepattern(relativePath).call();
-            staged.add(relativePath);
-            LOGGER.debug("Staged V-SUM state file: {}", relativePath);
-          } catch (GitAPIException e) {
-            LOGGER.warn("Failed to stage V-SUM state file '{}' (non-critical): {}",
-                relativePath, e.getMessage());
-          }
-        }
-      });
+    try {
+      git.add().addFilepattern(".vitruvius/vsum/" + branch + "/").call();
       LOGGER.info("Staged V-SUM state for branch '{}'", branch);
-    } catch (IOException e) {
-      LOGGER.warn("Failed to walk V-SUM state directory (non-critical): {}", e.getMessage());
+    } catch (GitAPIException e) {
+      LOGGER.warn("Failed to stage V-SUM state directory (non-critical): {}", e.getMessage());
     }
   }
 
@@ -553,7 +548,8 @@ public class CommitManager {
       // Without this commit they remain as staged-but-uncommitted changes, which
       // can bleed onto other branches when the developer switches without committing.
       git.commit()
-          .setMessage("[vitruvius] Semantic changelog for " + commitSha.substring(0, 7))
+          .setMessage("[vitruvius] Semantic changelog for " + commitSha.substring(0, 7)
+              + "\n\nVitruvius-System: true")
           .setNoVerify(true)
           .call();
       LOGGER.info("Changelog auto-committed for {}", commitSha.substring(0, 7));

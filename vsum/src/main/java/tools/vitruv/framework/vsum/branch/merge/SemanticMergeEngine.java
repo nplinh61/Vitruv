@@ -118,6 +118,19 @@ public class SemanticMergeEngine {
     }
 
     /**
+     * Returns a new engine with the same configuration but with the given
+     * {@link ConflictResolutionProvider} substituted in. Use this to obtain a
+     * provider-aware engine from a shared base engine without mutating the original.
+     *
+     * @param provider the conflict resolution provider to use; must not be {@code null}.
+     * @return a new {@link SemanticMergeEngine} that consults {@code provider} during replay.
+     */
+    public SemanticMergeEngine withConflictResolutionProvider(ConflictResolutionProvider provider) {
+        return new SemanticMergeEngine(repoRoot, specs, interactionProvider, provider,
+                intraBranchMode);
+    }
+
+    /**
      * Performs a bidirectional merge between two branches.
      *
      * <p>First attempts A→B (replay A onto B). If indirect conflicts are detected

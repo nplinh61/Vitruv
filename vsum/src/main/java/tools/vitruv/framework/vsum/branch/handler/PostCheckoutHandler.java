@@ -49,6 +49,18 @@ public class PostCheckoutHandler {
   }
 
   /**
+   * Creates a new {@link PostCheckoutHandler} with an injected {@link BranchManager}.
+   * Use this constructor in tests or when the caller already holds a BranchManager instance.
+   *
+   * @param virtualModel  the VirtualModel to reload on branch switch, must not be null.
+   * @param branchManager the BranchManager to use, must not be null.
+   */
+  public PostCheckoutHandler(VirtualModel virtualModel, BranchManager branchManager) {
+    this.virtualModel = checkNotNull(virtualModel, "VirtualModel must not be null");
+    this.branchManager = checkNotNull(branchManager, "BranchManager must not be null");
+  }
+
+  /**
    * Reloads the VirtualModel after a successful branch switch.
    * This method should be called once the Git working directory already reflects the new
    * branch content, so that the reload reads the correct files from disk.

@@ -175,11 +175,16 @@ public class SemanticChangelogManager {
     checkNotNull(branch, "branch must not be null");
     checkNotNull(shortSha, "shortSha must not be null");
 
-    Path file = resolveChangelogFile(branch, shortSha);
-    if (file == null) {
+    // Strictly canonical: only look in the branch's own directory.
+    // The cross-branch fallback in resolveChangelogFile() is intentionally not used here
+    // to preserve branch isolation (a changelog written on "main" must not be visible when
+    // asking for "feature-x", even if both share the same short SHA).
+    Path canonical = repositoryRoot.resolve(".vitruvius").resolve("changelogs")
+        .resolve(branch).resolve("json").resolve(shortSha + ".json");
+    if (!Files.exists(canonical)) {
       return null;
     }
-    String json = Files.readString(file);
+    String json = Files.readString(canonical);
     return gson.fromJson(json, ChangelogDocument.class);
   }
 
@@ -313,37 +318,6 @@ public class SemanticChangelogManager {
     doc.summary.affectedElementUuids = new ArrayList<>(allUuids);
 
     return doc;
-  }
-
-  /**
-   * Finds the Resource whose URI string matches the given resourceUri from the active resources.
-   */
-  private Resource findResource(Collection<Resource> resources, String resourceUri) {
-    for (Resource r : resources) {
-      if (r.getURI() != null && resourceUri.equals(r.getURI().toString())) {
-        return r;
-      }
-    }
-    return null;
-  }
-
-  /**
-   * Derives a short, file-system-safe name from a resource URI for use in XMI file names.
-   */
-  private String deriveResourceName(String resourceUri) {
-    try {
-      URI uri = URI.createURI(resourceUri);
-      String lastSegment = uri.lastSegment();
-      if (lastSegment != null && !lastSegment.isBlank()) {
-        // Strip extension
-        int dot = lastSegment.lastIndexOf('.');
-        return dot > 0 ? lastSegment.substring(0, dot) : lastSegment;
-      }
-    } catch (Exception e) {
-      LOGGER.debug("Could not derive resource name from URI '{}': {}", resourceUri, e.getMessage());
-    }
-    // Fallback: sanitize the URI string
-    return resourceUri.replaceAll("[^a-zA-Z0-9_-]", "_");
   }
 
   /**

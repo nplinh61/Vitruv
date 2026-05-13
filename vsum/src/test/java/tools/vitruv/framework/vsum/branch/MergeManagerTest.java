@@ -1,5 +1,6 @@
 package tools.vitruv.framework.vsum.branch;
 
+import org.eclipse.jgit.api.Git;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -59,9 +60,13 @@ class MergeManagerTest {
             try (var git = initRepo(repoDir)) {
                 var branchManager = new BranchManager(repoDir);
                 branchManager.createBranch("feature", "master");
-                git.checkout().setName("feature").call();
-                commitFile(git, repoDir, "system.model", "<System/>", "Add model");
-                git.checkout().setName("master").call();
+                // BranchManager made low-level ref updates; reopen to get a fresh ref view
+                // so that git.checkout("master") resolves to the correct (updated) HEAD.
+                try (var freshGit = Git.open(repoDir.toFile())) {
+                    freshGit.checkout().setName("feature").call();
+                    commitFile(freshGit, repoDir, "system.model", "<System/>", "Add model");
+                    freshGit.checkout().setName("master").call();
+                }
 
                 new MergeManager(repoDir).merge("feature");
 
@@ -106,11 +111,14 @@ class MergeManagerTest {
                 var branchManager = new BranchManager(repoDir);
                 branchManager.createBranch("feature", "master");
 
-                git.checkout().setName("feature").call();
-                commitFile(git, repoDir, "component.model", "<Component/>", "Add component");
+                // BranchManager made low-level ref updates; reopen to get a fresh ref view.
+                try (var freshGit = Git.open(repoDir.toFile())) {
+                    freshGit.checkout().setName("feature").call();
+                    commitFile(freshGit, repoDir, "component.model", "<Component/>", "Add component");
 
-                git.checkout().setName("master").call();
-                commitFile(git, repoDir, "system.model", "<System/>", "Add system");
+                    freshGit.checkout().setName("master").call();
+                    commitFile(freshGit, repoDir, "system.model", "<System/>", "Add system");
+                }
 
                 new MergeManager(repoDir).merge("feature");
 

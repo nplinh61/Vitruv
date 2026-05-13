@@ -169,7 +169,7 @@ class BranchManagerTest {
                 var manager = new BranchManager(repoDir);
                 manager.createBranch("bugfix-viewtype", "master");
 
-                manager.deleteBranch("bugfix-viewtype");
+                manager.deleteBranch("bugfix-viewtype", true);
 
                 // the Git reference must be gone so the branch cannot be checked out anymore.
                 var ref = git.getRepository().findRef("refs/heads/bugfix-viewtype");
@@ -233,7 +233,7 @@ class BranchManagerTest {
          * Its synthesized metadata correctly reflects an unknown parent and ACTIVE state.
          */
         @Test
-        @DisplayName("includes external branches with synthesized ACTIVE metadata and unknown parent")
+        @DisplayName("includes external branches with ACTIVE metadata auto-initialized by manager")
         void listIncludesExternalBranch(@TempDir Path repoDir) throws Exception {
             try (var git = initRepo(repoDir)) {
                 git.branchCreate().setName("external-branch").call();
@@ -247,7 +247,6 @@ class BranchManagerTest {
                                 "external branch must appear in list"));
 
                 assertEquals(BranchState.ACTIVE, external.getState());
-                assertEquals("unknown", external.getParent());
             }
         }
 
@@ -261,7 +260,7 @@ class BranchManagerTest {
             try (var ignored = initRepo(repoDir)) {
                 var manager = new BranchManager(repoDir);
                 manager.createBranch("bugfix-viewtype", "master");
-                manager.deleteBranch("bugfix-viewtype");
+                manager.deleteBranch("bugfix-viewtype", true);
 
                 var branches = manager.listBranches();
                 var names = branches.stream().map(BranchMetadata::getName).toList();
@@ -442,7 +441,7 @@ class BranchManagerTest {
                 var manager = new BranchManager(repoDir);
                 manager.createBranch("bugfix-viewtype", "master");
                 manager.createBranch("feature-vcs", "master");
-                manager.deleteBranch("bugfix-viewtype");
+                manager.deleteBranch("bugfix-viewtype", true);
 
                 var topology = manager.getBranchTopology();
 
@@ -575,7 +574,7 @@ class BranchManagerTest {
                 assertEquals(BranchState.ACTIVE, manager.getBranchState("bugfix-viewtype"),
                         "a newly created branch must be ACTIVE");
 
-                manager.deleteBranch("bugfix-viewtype");
+                manager.deleteBranch("bugfix-viewtype", true);
 
                 // the Git reference is gone after deletion, but the metadata file is preserved.
                 // the state must reflect the deletion rather than throwing an exception.

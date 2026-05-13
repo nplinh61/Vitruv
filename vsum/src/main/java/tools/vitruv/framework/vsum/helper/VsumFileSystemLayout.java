@@ -28,9 +28,6 @@ public class VsumFileSystemLayout {
     private static final String MODELS_FILE = "models.models";
     private static final String CONSISTENCY_METADATA_FOLDER_NAME = "consistencymetadata";
 
-    /**
-     * Linh:new
-     */
     private static final String VSUM_BASE_DIR = ".vitruvius/vsum";
     private final String currentBranch;
     private static final Logger LOGGER = LogManager.getLogger(VsumFileSystemLayout.class);
@@ -46,23 +43,15 @@ public class VsumFileSystemLayout {
     public VsumFileSystemLayout(Path vsumProjectFolder) {
 
         this.vsumProjectFolder = vsumProjectFolder;
-        //Linh:new
         this.currentBranch = resolveBranchName();
     }
 
-    /**
-     * Linh:new
-     * Package-private constructor for tests that do not run inside git repo
-     */
+    /** Package-private constructor for tests that do not run inside a git repo. */
     VsumFileSystemLayout(Path vsumProjectFolder, String branchName) {
         this.vsumProjectFolder = vsumProjectFolder;
         this.currentBranch = branchName;
     }
 
-    /**
-     * Linh:new
-     * Resolve name of the current branch
-     */
     private String resolveBranchName() {
         try (Git git = Git.open(vsumProjectFolder.toFile())) {
             Repository repo = git.getRepository();
@@ -182,14 +171,10 @@ public class VsumFileSystemLayout {
     }
 
     private Path getVsumFolder() {
-        //return vsumProjectFolder.resolve(VSUM_FOLDER_NAME);
-        //Linh:new
         return vsumProjectFolder.resolve(VSUM_BASE_DIR).resolve(currentBranch);
     }
 
     private Path getConsistencyMetadataFolder() {
-        //return vsumProjectFolder.resolve(CONSISTENCY_METADATA_FOLDER_NAME);
-        //Linh:new
         return getVsumFolder().resolve(CONSISTENCY_METADATA_FOLDER_NAME);
     }
 
@@ -205,9 +190,6 @@ public class VsumFileSystemLayout {
         return new VsumFileSystemLayout(vsumProjectFolder, branchName);
     }
 
-    /**
-     * Linh:new
-     */
     public String getCurrentBranch() {
         return currentBranch;
     }
@@ -327,8 +309,6 @@ public class VsumFileSystemLayout {
 
     @Override
     public String toString() {
-        //return "@" + vsumProjectFolder;
-        //Linh:new
         return "@" + vsumProjectFolder + "[branch=" + currentBranch + "]";
     }
 

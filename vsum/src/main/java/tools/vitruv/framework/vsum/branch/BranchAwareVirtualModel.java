@@ -56,11 +56,7 @@ public class BranchAwareVirtualModel implements InternalVirtualModel {
    */
   private final Path repoRoot;
 
-    public String getActiveBranch() {
-        return activeBranchName;
-    }
-
-    /**
+  /**
    * Name of the currently active branch. Kept in sync with the layout inside
    * {@link #activeModel} after every successful switch.
    * Updated only after a successful reload so that it always reflects real state.
@@ -73,11 +69,7 @@ public class BranchAwareVirtualModel implements InternalVirtualModel {
    */
   private final BranchManager branchManager;
 
-    public SemanticChangeBuffer getChangeBuffer() {
-        return changeBuffer;
-    }
-
-    /**
+  /**
    * Accumulates atomic EChanges between commits so they can be serialized into the
    * semantic changelog. Registered as a {@link ChangePropagationListener} on construction
    * and cleared by {@link CommitManager} at commit time.
@@ -98,12 +90,27 @@ public class BranchAwareVirtualModel implements InternalVirtualModel {
    * @param activeModel the already-initialized V-SUM instance to wrap, must not be null.
    */
   public BranchAwareVirtualModel(Path repoRoot, InternalVirtualModel activeModel) {
+    this(repoRoot, activeModel, new BranchManager(repoRoot));
+  }
+
+  /**
+   * Creates a new {@link BranchAwareVirtualModel} with a shared {@link BranchManager}.
+   * Prefer this constructor in production wiring where a {@link BranchManager} already
+   * exists (e.g. the REST server), to avoid constructing a second independent instance
+   * for the same repository.
+   *
+   * @param repoRoot      root directory of the Git repository, must not be null.
+   * @param activeModel   the already-initialized V-SUM instance to wrap, must not be null.
+   * @param branchManager the shared branch manager to use, must not be null.
+   */
+  public BranchAwareVirtualModel(Path repoRoot, InternalVirtualModel activeModel,
+      BranchManager branchManager) {
     this.repoRoot = checkNotNull(repoRoot, "repo root must not be null");
     this.activeModel = checkNotNull(activeModel, "active model must not be null");
+    this.branchManager = checkNotNull(branchManager, "branchManager must not be null");
     // Resolve the current branch from Git HEAD so activeBranchName is always correct
     VsumFileSystemLayout currentLayout = new VsumFileSystemLayout(repoRoot);
     this.activeBranchName = currentLayout.getCurrentBranch();
-    this.branchManager = new BranchManager(repoRoot);
     activeModel.addChangePropagationListener(changeBuffer);
     LOGGER.info("BranchAwareVirtualModel initialized on branch '{}'", activeBranchName);
   }
@@ -189,7 +196,15 @@ public class BranchAwareVirtualModel implements InternalVirtualModel {
     }
   }
 
-    /**
+  public String getActiveBranch() {
+    return activeBranchName;
+  }
+
+  public SemanticChangeBuffer getChangeBuffer() {
+    return changeBuffer;
+  }
+
+  /**
    * Returns the correspondence model of the currently active branch's V-SUM.
    */
   @Override

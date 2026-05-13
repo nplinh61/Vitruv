@@ -5,9 +5,10 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import tools.vitruv.framework.vsum.branch.BranchManager;
 import tools.vitruv.framework.vsum.branch.data.BranchMetadata;
 import tools.vitruv.framework.vsum.branch.data.BranchState;
-import tools.vitruv.framework.vsum.internal.InternalVirtualModel;
+import tools.vitruv.framework.vsum.versioning.VersioningException;
 import tools.vitruv.framework.vsum.versioning.data.RollbackResult;
 import tools.vitruv.framework.vsum.versioning.data.VersionMetadata;
 
@@ -22,13 +23,13 @@ import static tools.vitruv.framework.vsum.branch.GitTestHelper.initRepo;
 /**
  * Unit tests for {@link VersioningService}.
  *
- * <p>{@link InternalVirtualModel} is mocked via Mockito so that reload()
- * behavior can be verified without a real VSUM instance.
+ * <p>The reload callback is mocked via Mockito so that reload invocation
+ * can be verified without a real VSUM instance.
  */
 class VersioningServiceTest {
 
-    private static InternalVirtualModel mockVirtualModel() {
-        return mock(InternalVirtualModel.class);
+    private static Runnable noOpReload() {
+        return () -> {};
     }
 
     @Nested
@@ -39,7 +40,7 @@ class VersioningServiceTest {
         @DisplayName("creates annotated Git tag and persists metadata")
         void createsTagAndMetadata(@TempDir Path repoDir) throws Exception {
             try (var ignored = initRepo(repoDir)) {
-                var service = new VersioningService(repoDir, mockVirtualModel());
+                var service = new VersioningService(repoDir, noOpReload(), new BranchManager(repoDir));
 
                 var metadata = service.createVersion("v1.0", "First stable release");
 
@@ -72,7 +73,7 @@ class VersioningServiceTest {
         @DisplayName("creates version with null description without throwing")
         void createsVersionWithNullDescription(@TempDir Path repoDir) throws Exception {
             try (var ignored = initRepo(repoDir)) {
-                var service = new VersioningService(repoDir, mockVirtualModel());
+                var service = new VersioningService(repoDir, noOpReload(), new BranchManager(repoDir));
                 assertDoesNotThrow(() -> service.createVersion("v1.0", null));
                 var metadata = service.getVersion("v1.0");
                 assertEquals("", metadata.getDescription());
@@ -83,7 +84,7 @@ class VersioningServiceTest {
         @DisplayName("throws when version ID already exists")
         void throwsOnDuplicateVersionId(@TempDir Path repoDir) throws Exception {
             try (var ignored = initRepo(repoDir)) {
-                var service = new VersioningService(repoDir, mockVirtualModel());
+                var service = new VersioningService(repoDir, noOpReload(), new BranchManager(repoDir));
                 service.createVersion("v1.0", "First");
                 assertThrows(VersioningException.class,
                         () -> service.createVersion("v1.0", "Duplicate"));
@@ -94,8 +95,8 @@ class VersioningServiceTest {
         @DisplayName("throws when version ID is blank")
         void throwsOnBlankVersionId(@TempDir Path repoDir) throws Exception {
             try (var ignored = initRepo(repoDir)) {
-                var service = new VersioningService(repoDir, mockVirtualModel());
-                assertThrows(IllegalArgumentException.class,
+                var service = new VersioningService(repoDir, noOpReload(), new BranchManager(repoDir));
+                assertThrows(VersioningException.class,
                         () -> service.createVersion("   ", "desc"));
             }
         }
@@ -109,7 +110,7 @@ class VersioningServiceTest {
         @DisplayName("returns empty list when no versions exist")
         void returnsEmptyListWhenNoVersions(@TempDir Path repoDir) throws Exception {
             try (var ignored = initRepo(repoDir)) {
-                var service = new VersioningService(repoDir, mockVirtualModel());
+                var service = new VersioningService(repoDir, noOpReload(), new BranchManager(repoDir));
                 assertTrue(service.listVersions().isEmpty());
             }
         }
@@ -118,7 +119,7 @@ class VersioningServiceTest {
         @DisplayName("returns all created versions sorted newest first")
         void returnsAllVersionsSortedNewestFirst(@TempDir Path repoDir) throws Exception {
             try (var ignored = initRepo(repoDir)) {
-                var service = new VersioningService(repoDir, mockVirtualModel());
+                var service = new VersioningService(repoDir, noOpReload(), new BranchManager(repoDir));
                 service.createVersion("v1.0", "First");
                 Thread.sleep(50); // ensure timestamps differ
                 service.createVersion("v2.0", "Second");
@@ -141,7 +142,7 @@ class VersioningServiceTest {
         @DisplayName("returns correct metadata for existing version")
         void returnsMetadataForExistingVersion(@TempDir Path repoDir) throws Exception {
             try (var ignored = initRepo(repoDir)) {
-                var service = new VersioningService(repoDir, mockVirtualModel());
+                var service = new VersioningService(repoDir, noOpReload(), new BranchManager(repoDir));
                 service.createVersion("v1.0", "Release");
 
                 var metadata = service.getVersion("v1.0");
@@ -155,7 +156,7 @@ class VersioningServiceTest {
         @DisplayName("throws when version does not exist")
         void throwsWhenVersionNotFound(@TempDir Path repoDir) throws Exception {
             try (var ignored = initRepo(repoDir)) {
-                var service = new VersioningService(repoDir, mockVirtualModel());
+                var service = new VersioningService(repoDir, noOpReload(), new BranchManager(repoDir));
                 assertThrows(VersioningException.class,
                         () -> service.getVersion("nonexistent"));
             }
@@ -170,7 +171,7 @@ class VersioningServiceTest {
         @DisplayName("preview shows commits to abandon between version and HEAD")
         void previewShowsCommitsToAbandon(@TempDir Path repoDir) throws Exception {
             try (var git = initRepo(repoDir)) {
-                var service = new VersioningService(repoDir, mockVirtualModel());
+                var service = new VersioningService(repoDir, noOpReload(), new BranchManager(repoDir));
                 // Tag current state as v1.0
                 service.createVersion("v1.0", "Baseline");
 
@@ -192,7 +193,7 @@ class VersioningServiceTest {
         @DisplayName("preview reports uncommitted changes when working directory is dirty")
         void previewReportsUncommittedChanges(@TempDir Path repoDir) throws Exception {
             try (var git = initRepo(repoDir)) {
-                var service = new VersioningService(repoDir, mockVirtualModel());
+                var service = new VersioningService(repoDir, noOpReload(), new BranchManager(repoDir));
                 // First commit a file so it is tracked
                 commitFile(git, repoDir, "dirty.model", "<Original/>", "Add dirty");
                 service.createVersion("v1.0", "Baseline");
@@ -211,7 +212,7 @@ class VersioningServiceTest {
         @DisplayName("preview shows files that will change")
         void previewShowsFilesToChange(@TempDir Path repoDir) throws Exception {
             try (var git = initRepo(repoDir)) {
-                var service = new VersioningService(repoDir, mockVirtualModel());
+                var service = new VersioningService(repoDir, noOpReload(), new BranchManager(repoDir));
                 service.createVersion("v1.0", "Baseline");
 
                 commitFile(git, repoDir, "system.model", "<System/>", "Add system");
@@ -229,7 +230,7 @@ class VersioningServiceTest {
         @DisplayName("throws when version does not exist")
         void throwsWhenVersionNotFound(@TempDir Path repoDir) throws Exception {
             try (var ignored = initRepo(repoDir)) {
-                var service = new VersioningService(repoDir, mockVirtualModel());
+                var service = new VersioningService(repoDir, noOpReload(), new BranchManager(repoDir));
                 assertThrows(VersioningException.class,
                         () -> service.previewRollback("nonexistent"));
             }
@@ -244,7 +245,7 @@ class VersioningServiceTest {
         @DisplayName("removes metadata file and Git tag")
         void removesMetadataAndTag(@TempDir Path repoDir) throws Exception {
             try (var git = initRepo(repoDir)) {
-                var service = new VersioningService(repoDir, mockVirtualModel());
+                var service = new VersioningService(repoDir, noOpReload(), new BranchManager(repoDir));
                 service.createVersion("v1.0", "to delete");
 
                 service.deleteVersion("v1.0");
@@ -258,7 +259,7 @@ class VersioningServiceTest {
         @DisplayName("throws when version does not exist")
         void throwsWhenVersionNotFound(@TempDir Path repoDir) throws Exception {
             try (var ignored = initRepo(repoDir)) {
-                var service = new VersioningService(repoDir, mockVirtualModel());
+                var service = new VersioningService(repoDir, noOpReload(), new BranchManager(repoDir));
                 assertThrows(VersioningException.class,
                         () -> service.deleteVersion("nonexistent"));
             }
@@ -273,7 +274,7 @@ class VersioningServiceTest {
         @DisplayName("creates Git branch pointing to the version's commit")
         void createsGitBranchAtVersionCommit(@TempDir Path repoDir) throws Exception {
             try (var git = initRepo(repoDir)) {
-                var service = new VersioningService(repoDir, mockVirtualModel());
+                var service = new VersioningService(repoDir, noOpReload(), new BranchManager(repoDir));
                 var version = service.createVersion("v1.0", "baseline");
 
                 service.createBranchFromVersion("feature-x", "v1.0");
@@ -289,7 +290,7 @@ class VersioningServiceTest {
         @DisplayName("extracts V-SUM files from the version's commit into the new branch's directory")
         void extractsVsumFilesFromVersionCommit(@TempDir Path repoDir) throws Exception {
             try (var ignored = initRepo(repoDir)) {
-                var service = new VersioningService(repoDir, mockVirtualModel());
+                var service = new VersioningService(repoDir, noOpReload(), new BranchManager(repoDir));
                 service.createVersion("v1.0", "baseline");
 
                 service.createBranchFromVersion("feature-x", "v1.0");
@@ -306,7 +307,7 @@ class VersioningServiceTest {
         @DisplayName("writes branch metadata with ACTIVE state and correct parent")
         void writesBranchMetadata(@TempDir Path repoDir) throws Exception {
             try (var ignored = initRepo(repoDir)) {
-                var service = new VersioningService(repoDir, mockVirtualModel());
+                var service = new VersioningService(repoDir, noOpReload(), new BranchManager(repoDir));
                 service.createVersion("v1.0", "baseline");
 
                 BranchMetadata metadata = service.createBranchFromVersion("feature-x", "v1.0");
@@ -322,7 +323,7 @@ class VersioningServiceTest {
         @DisplayName("branch starts from version commit, not current HEAD")
         void branchStartsFromVersionNotCurrentHead(@TempDir Path repoDir) throws Exception {
             try (var git = initRepo(repoDir)) {
-                var service = new VersioningService(repoDir, mockVirtualModel());
+                var service = new VersioningService(repoDir, noOpReload(), new BranchManager(repoDir));
                 var v1 = service.createVersion("v1.0", "baseline");
 
                 commitFile(git, repoDir, "extra.xmi", "<extra/>", "Second commit");
@@ -340,7 +341,7 @@ class VersioningServiceTest {
         @DisplayName("throws when version does not exist")
         void throwsWhenVersionNotFound(@TempDir Path repoDir) throws Exception {
             try (var ignored = initRepo(repoDir)) {
-                var service = new VersioningService(repoDir, mockVirtualModel());
+                var service = new VersioningService(repoDir, noOpReload(), new BranchManager(repoDir));
                 assertThrows(VersioningException.class,
                         () -> service.createBranchFromVersion("feature-x", "nonexistent"));
             }
@@ -350,7 +351,7 @@ class VersioningServiceTest {
         @DisplayName("throws when branch name already exists")
         void throwsWhenBranchAlreadyExists(@TempDir Path repoDir) throws Exception {
             try (var ignored = initRepo(repoDir)) {
-                var service = new VersioningService(repoDir, mockVirtualModel());
+                var service = new VersioningService(repoDir, noOpReload(), new BranchManager(repoDir));
                 service.createVersion("v1.0", "baseline");
                 service.createBranchFromVersion("feature-x", "v1.0");
 
@@ -368,8 +369,8 @@ class VersioningServiceTest {
         @DisplayName("resets HEAD to target version commit and reloads VSUM")
         void resetsHeadAndReloadsVsum(@TempDir Path repoDir) throws Exception {
             try (var git = initRepo(repoDir)) {
-                var virtualModel = mockVirtualModel();
-                var service = new VersioningService(repoDir, virtualModel);
+                var onReload = mock(Runnable.class);
+                var service = new VersioningService(repoDir, onReload, new BranchManager(repoDir));
 
                 // Tag v1.0 at initial commit
                 service.createVersion("v1.0", "Baseline");
@@ -391,7 +392,7 @@ class VersioningServiceTest {
                         "HEAD must point to the v1.0 commit after rollback");
 
                 // VSUM reload must have been called
-                verify(virtualModel, times(1)).reload();
+                verify(onReload, times(1)).run();
             }
         }
 
@@ -399,10 +400,10 @@ class VersioningServiceTest {
         @DisplayName("returns SUCCESS_RELOAD_FAILED when VSUM reload throws")
         void returnsReloadFailedWhenVsumReloadThrows(@TempDir Path repoDir) throws Exception {
             try (var git = initRepo(repoDir)) {
-                var virtualModel = mockVirtualModel();
+                var onReload = mock(Runnable.class);
                 doThrow(new RuntimeException("reload failed"))
-                        .when(virtualModel).reload();
-                var service = new VersioningService(repoDir, virtualModel);
+                        .when(onReload).run();
+                var service = new VersioningService(repoDir, onReload, new BranchManager(repoDir));
 
                 service.createVersion("v1.0", "Baseline");
                 commitFile(git, repoDir, "system.model", "<System/>", "After tag");
@@ -424,7 +425,7 @@ class VersioningServiceTest {
         @DisplayName("rollback to same commit succeeds without abandoning commits")
         void rollbackToCurrentCommitSucceeds(@TempDir Path repoDir) throws Exception {
             try (var ignored = initRepo(repoDir)) {
-                var service = new VersioningService(repoDir, mockVirtualModel());
+                var service = new VersioningService(repoDir, noOpReload(), new BranchManager(repoDir));
                 service.createVersion("v1.0", "Current");
 
                 var preview = service.previewRollback("v1.0");
