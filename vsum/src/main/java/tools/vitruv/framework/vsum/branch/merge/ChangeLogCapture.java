@@ -211,7 +211,7 @@ public class ChangeLogCapture implements ChangePropagationListener {
             pendingChange = null;
             pendingUuidStrings.clear();
             preCapturedIds.clear();
-            // Note: cascadeDeletedUuids is NOT cleared here -- it is drained
+            // Note: cascadeDeletedUuids is NOT cleared here; it is drained
             // by drainCascadeDeletedUuids() alongside drainChanges().
         }
     }

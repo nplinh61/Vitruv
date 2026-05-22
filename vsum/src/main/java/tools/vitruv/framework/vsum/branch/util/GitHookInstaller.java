@@ -64,6 +64,12 @@ public class GitHookInstaller {
   private static final String GITIGNORE_TEMPLATE_PATH = "/vitruvius/.gitignore.template";
 
   /**
+   * Guard comment that marks the Vitruvius-managed section in {@code .gitattributes}.
+   * Used both when writing the section and when detecting or removing it.
+   */
+  private static final String GITATTRIBUTES_GUARD = "# Vitruvius merge driver";
+
+  /**
    * The {@code .git/hooks} directory of the target repository.
    * All hook files are written to and read from this directory.
    */
@@ -196,7 +202,6 @@ public class GitHookInstaller {
   public void installGitignore() throws IOException {
     Path gitignoreFile = repositoryRoot.resolve(".gitignore");
 
-    // Read template from classpath
     String templateContent;
     try (InputStream template = getClass().getResourceAsStream(GITIGNORE_TEMPLATE_PATH)) {
       if (template == null) {
@@ -240,17 +245,15 @@ public class GitHookInstaller {
    */
   public void installGitAttributes(List<String> fileExtensions) throws IOException {
     Path gitattributes = repositoryRoot.resolve(".gitattributes");
-    String guard = "# Vitruvius merge driver";
+    String existing = Files.exists(gitattributes) ? Files.readString(gitattributes) : null;
 
-    if (Files.exists(gitattributes)
-        && Files.readString(gitattributes).contains(guard)) {
+    if (existing != null && existing.contains(GITATTRIBUTES_GUARD)) {
       LOGGER.debug(".gitattributes already has Vitruvius entries, skipping");
       return;
     }
 
     var sb = new StringBuilder();
-    if (Files.exists(gitattributes)) {
-      String existing = Files.readString(gitattributes);
+    if (existing != null) {
       sb.append(existing);
       if (!existing.endsWith("\n")) {
         sb.append("\n");
@@ -258,7 +261,7 @@ public class GitHookInstaller {
       sb.append("\n");
     }
 
-    sb.append(guard).append("\n");
+    sb.append(GITATTRIBUTES_GUARD).append("\n");
     for (String ext : fileExtensions) {
       String pattern = ext.startsWith("*.") ? ext : "*." + ext;
       sb.append(pattern).append(" merge=vitruvius\n");
@@ -365,9 +368,8 @@ public class GitHookInstaller {
       LOGGER.debug(".gitattributes does not exist, nothing to uninstall");
       return;
     }
-    String guard = "# Vitruvius merge driver";
     String content = Files.readString(gitattributes);
-    if (!content.contains(guard)) {
+    if (!content.contains(GITATTRIBUTES_GUARD)) {
       LOGGER.debug(".gitattributes has no Vitruvius section, nothing to uninstall");
       return;
     }
@@ -375,7 +377,7 @@ public class GitHookInstaller {
     List<String> lines = new ArrayList<>(List.of(content.split("\n", -1)));
     int guardIndex = -1;
     for (int i = 0; i < lines.size(); i++) {
-      if (lines.get(i).stripTrailing().equals(guard)) {
+      if (lines.get(i).stripTrailing().equals(GITATTRIBUTES_GUARD)) {
         guardIndex = i;
         break;
       }
@@ -513,7 +515,6 @@ public class GitHookInstaller {
       LOGGER.info("backed up existing {} hook", hookName);
     }
 
-    // copy the hook script from the application's bundled resources into the hooks directory.
     var resourcePath = HOOKS_RESOURCE_PATH + hookName;
     try (InputStream hookTemplate = getClass().getResourceAsStream(resourcePath)) {
       if (hookTemplate == null) {

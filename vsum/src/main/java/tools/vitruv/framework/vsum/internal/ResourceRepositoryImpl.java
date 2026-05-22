@@ -78,12 +78,8 @@ class ResourceRepositoryImpl implements ModelRepository {
     }
 
     @Override
-    public void reload(VsumFileSystemLayout newLayout) {
-        // redirect to new file system layout
-        // everything that reads from disk after this point will read from the new branch's dir
+    public void reinitialize(VsumFileSystemLayout newLayout) {
         this.fileSystemLayout = newLayout;
-        //internal URi still points to the previous branchs correspondence file
-        // recreating is required since correspondence model uri is no longer valid
         this.correspondenceModel = createPersistableCorrespondenceModel(newLayout.getCorrespondencesURI());
         reload();
     }

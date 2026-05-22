@@ -4,6 +4,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.eclipse.emf.ecore.EObject;
@@ -28,7 +29,7 @@ import tools.vitruv.change.atomic.uuid.UuidResolver;
  * Converts a list of resolved {@code EChange<EObject>} instances into {@link SemanticChangeEntry}
  * records suitable for JSON serialization in the semantic changelog.
  *
- * <p>Each EMF change subtype is mapped to a {@link SemanticChangeType}
+ * <p>Each EMF change subtype is mapped to a {@link SemanticChangeType}.
  * The UUID of each affected element is resolved via {@link UuidResolver}.
  * If UUID resolution fails for a given element (for example because the element has been deleted
  * and unregistered from the resolver), the entry is still produced but the {@code elementUuid}
@@ -50,13 +51,20 @@ public class EChangeToEntryConverter {
   private final HierarchicalIdResolver hierarchicalIdResolver;
 
   /**
+   * Pre-captured UUID strings for deletion-type EChange instances, keyed by EChange identity.
+   * Consulted as a fallback in {@link #resolveUuid(EObject, EChange)} when the element has
+   * already been unregistered from the UUID resolver after deletion.
+   */
+  private final Map<EChange<EObject>, String> deletionUuidOverrides;
+
+  /**
    * Creates a converter that uses the given resolver for UUID lookups.
    * Hierarchical IDs will not be populated.
    *
    * @param uuidResolver the resolver to use, must not be null.
    */
   public EChangeToEntryConverter(UuidResolver uuidResolver) {
-    this(uuidResolver, null);
+    this(uuidResolver, null, null);
   }
 
   /**
@@ -67,8 +75,24 @@ public class EChangeToEntryConverter {
    */
   public EChangeToEntryConverter(UuidResolver uuidResolver,
       HierarchicalIdResolver hierarchicalIdResolver) {
+    this(uuidResolver, hierarchicalIdResolver, null);
+  }
+
+  /**
+   * Creates a converter with pre-captured deletion UUID overrides. Use this constructor when
+   * deletion UUIDs were captured before element removal (via {@link SemanticChangeBuffer}).
+   *
+   * @param uuidResolver the UUID resolver to use, must not be null.
+   * @param hierarchicalIdResolver the HierarchicalId resolver to use, or {@code null} to skip.
+   * @param deletionUuidOverrides pre-captured UUID strings keyed by EChange identity, or
+   *     {@code null} to disable override lookup.
+   */
+  public EChangeToEntryConverter(UuidResolver uuidResolver,
+      HierarchicalIdResolver hierarchicalIdResolver,
+      Map<EChange<EObject>, String> deletionUuidOverrides) {
     this.uuidResolver = checkNotNull(uuidResolver, "uuidResolver must not be null");
     this.hierarchicalIdResolver = hierarchicalIdResolver;
+    this.deletionUuidOverrides = deletionUuidOverrides != null ? deletionUuidOverrides : Map.of();
   }
 
   /**
@@ -80,10 +104,11 @@ public class EChangeToEntryConverter {
    */
   public List<SemanticChangeEntry> convert(List<EChange<EObject>> eChanges) {
     checkNotNull(eChanges, "eChanges must not be null");
-    var idx = new int[]{0};
-    return eChanges.stream()
-        .map(change -> convertSingle(change, idx[0]++))
-        .toList();
+    List<SemanticChangeEntry> result = new ArrayList<>(eChanges.size());
+    for (int i = 0; i < eChanges.size(); i++) {
+      result.add(convertSingle(eChanges.get(i), i));
+    }
+    return result;
   }
 
   /**
@@ -140,6 +165,7 @@ public class EChangeToEntryConverter {
         .build();
   }
 
+  @SuppressWarnings("unchecked")
   private SemanticChangeEntry handleDelete(DeleteEObject<?> change, int index) {
     EObject element = (EObject) change.getAffectedElement();
     List<String> cascadeUuids = collectCascadeUuids(element);
@@ -147,7 +173,7 @@ public class EChangeToEntryConverter {
         .index(index)
         .changeType(SemanticChangeType.ELEMENT_DELETED)
         .emfType("DeleteEObject")
-        .elementUuid(resolveUuid(element))
+        .elementUuid(resolveUuid(element, (EChange<EObject>) change))
         .eClass(formatEClass(element))
         .hierarchicalId(resolveHierarchicalId(element))
         .cascadeDeletedUuids(cascadeUuids.isEmpty() ? null : cascadeUuids)
@@ -290,6 +316,7 @@ public class EChangeToEntryConverter {
   private SemanticChangeEntry handleInsertReference(InsertEReference<?> change, int index) {
     EObject element = (EObject) change.getAffectedElement();
     EObject inserted = (EObject) ((InsertEReference<Object>) change).getNewValue();
+    String insertedUuid = inserted != null ? resolveUuid(inserted) : null;
 
     return SemanticChangeEntry.builder()
         .index(index)
@@ -298,8 +325,8 @@ public class EChangeToEntryConverter {
         .elementUuid(resolveUuid(element))
         .eClass(formatEClass(element))
         .feature(featureName(change))
-        .referencedElementUuid(inserted != null ? resolveUuid(inserted) : null)
-        .to(inserted != null ? resolveUuid(inserted) : null)
+        .referencedElementUuid(insertedUuid)
+        .to(insertedUuid)
         .position(((UpdateSingleListEntryEChange<?, ?>) change).getIndex())
         .containerUuid(resolveContainerUuid(element))
         .hierarchicalId(resolveHierarchicalId(element))
@@ -311,6 +338,7 @@ public class EChangeToEntryConverter {
   private SemanticChangeEntry handleRemoveReference(RemoveEReference<?> change, int index) {
     EObject element = (EObject) change.getAffectedElement();
     EObject removed = (EObject) ((RemoveEReference<Object>) change).getOldValue();
+    String removedUuid = removed != null ? resolveUuid(removed) : null;
 
     return SemanticChangeEntry.builder()
         .index(index)
@@ -319,8 +347,8 @@ public class EChangeToEntryConverter {
         .elementUuid(resolveUuid(element))
         .eClass(formatEClass(element))
         .feature(featureName(change))
-        .referencedElementUuid(removed != null ? resolveUuid(removed) : null)
-        .from(removed != null ? resolveUuid(removed) : null)
+        .referencedElementUuid(removedUuid)
+        .from(removedUuid)
         .position(((UpdateSingleListEntryEChange<?, ?>) change).getIndex())
         .containerUuid(resolveContainerUuid(element))
         .hierarchicalId(resolveHierarchicalId(element))
@@ -352,7 +380,7 @@ public class EChangeToEntryConverter {
         .index(index)
         .changeType(SemanticChangeType.ROOT_REMOVED)
         .emfType("RemoveRootEObject")
-        .elementUuid(resolveUuid(element))
+        .elementUuid(resolveUuid(element, (EChange<EObject>) change))
         .eClass(formatEClass(element))
         .from(change.getUri())
         .hierarchicalId(resolveHierarchicalId(element))
@@ -432,12 +460,32 @@ public class EChangeToEntryConverter {
    * Returns {@code "unknown"} and logs a warning if resolution fails.
    */
   private String resolveUuid(EObject element) {
+    return resolveUuid(element, null);
+  }
+
+  /**
+   * Resolves the Vitruvius UUID string for the given EObject, with a pre-captured override
+   * fallback for deletion-type changes where the element is already unregistered.
+   *
+   * @param element the EObject whose UUID to resolve.
+   * @param change  the EChange that produced this element lookup, used to find a pre-captured
+   *                UUID override; may be {@code null} to skip override lookup.
+   */
+  private String resolveUuid(EObject element, EChange<EObject> change) {
     if (element == null) {
       return null;
     }
     try {
       if (uuidResolver.hasUuid(element)) {
         return uuidResolver.getUuid(element).toString();
+      }
+      if (change != null) {
+        String override = deletionUuidOverrides.get(change);
+        if (override != null) {
+          LOGGER.debug("Using pre-captured UUID '{}' for detached element of type '{}'",
+              override, element.eClass() != null ? element.eClass().getName() : "?");
+          return override;
+        }
       }
       String eClassName = element.eClass() != null ? element.eClass().getName() : "null";
       boolean isProxy = element.eIsProxy();

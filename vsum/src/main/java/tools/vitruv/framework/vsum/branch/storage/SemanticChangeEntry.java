@@ -185,9 +185,7 @@ public class SemanticChangeEntry {
    * can use this without requiring a field type change.
    */
   public ChangeOrigin getOrigin() {
-    if ("consequential".equalsIgnoreCase(changeOrigin)) return ChangeOrigin.CONSEQUENTIAL;
-    if ("original".equalsIgnoreCase(changeOrigin)) return ChangeOrigin.ORIGINAL;
-    return ChangeOrigin.UNKNOWN;
+    return ChangeOrigin.fromString(changeOrigin);
   }
 
   /**

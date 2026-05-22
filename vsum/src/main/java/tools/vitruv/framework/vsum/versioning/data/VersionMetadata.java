@@ -15,6 +15,7 @@ import lombok.Getter;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import tools.vitruv.framework.vsum.branch.data.MaturityLevel;
+
 /**
  * Holds Vitruvius-specific metadata for a single model version (Git annotated tag).
  *

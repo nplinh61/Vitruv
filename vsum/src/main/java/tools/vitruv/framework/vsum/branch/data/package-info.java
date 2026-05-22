@@ -32,7 +32,7 @@
  *   <li>{@link tools.vitruv.framework.vsum.branch.data.ConflictSeverity}:HIGH / MEDIUM
  *       severity levels for semantic conflicts.</li>
  *   <li>{@link tools.vitruv.framework.vsum.branch.data.FileOperation}:file-level Git
- *       operation type: ADDED, MODIFIED, DELETED, RENAMED, COPIED.</li>
+ *       operation type: ADDED, MODIFIED, DELETED, RENAMED.</li>
  * </ul>
  */
 package tools.vitruv.framework.vsum.branch.data;

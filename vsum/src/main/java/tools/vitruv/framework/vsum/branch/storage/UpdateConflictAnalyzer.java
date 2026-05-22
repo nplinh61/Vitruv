@@ -6,6 +6,7 @@ import tools.vitruv.framework.vsum.branch.data.UpdateConflict;
 import tools.vitruv.framework.vsum.branch.storage.SemanticChangelogManager.ChangelogDocument;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -19,8 +20,8 @@ import java.util.Set;
  *   <li>Branch B also records a modification to the same feature F on the same element X</li>
  * </ul>
  *
- * <p>The detection is purely DTO-based (UUID + feature name comparison) --
- * no model instances are loaded into memory, preserving the performance
+ * <p>The detection is purely DTO-based (UUID + feature name comparison).
+ * No model instances are loaded into memory, preserving the performance
  * characteristics described in the paper.
  *
  * <p>When one side is {@link ChangeOrigin#ORIGINAL} and the other is
@@ -73,6 +74,7 @@ public class UpdateConflictAnalyzer {
 
         List<SemanticChangeEntry> sourceEntries = collectModifyingEntries(sourceChangelog);
         List<SemanticChangeEntry> targetEntries = collectModifyingEntries(targetChangelog);
+        Set<String> recorded = new HashSet<>();
 
         // For each source modification, check if the target also modifies the same UUID+feature
         for (SemanticChangeEntry sourceEntry : sourceEntries) {
@@ -87,11 +89,7 @@ public class UpdateConflictAnalyzer {
                 if (Objects.equals(uuid, targetEntry.getElementUuid())
                         && Objects.equals(feature, targetEntry.getFeature())) {
 
-                    // Avoid duplicates: only record the conflict once per UUID+feature pair
-                    boolean alreadyRecorded = conflicts.stream().anyMatch(c ->
-                            Objects.equals(c.getElementUuid(), uuid)
-                                    && Objects.equals(c.getFeatureName(), feature));
-                    if (alreadyRecorded) {
+                    if (!recorded.add(uuid + "#" + feature)) {
                         continue;
                     }
 

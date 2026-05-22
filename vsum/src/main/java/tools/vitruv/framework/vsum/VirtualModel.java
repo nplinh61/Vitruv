@@ -18,12 +18,11 @@ public interface VirtualModel extends ChangeableModelRepository, ViewProvider, V
   Path getFolder();
 
   /**
-   * Reloads all models from the file system, discarding any in memory state and
-   * reflecting the current state of the files on disk.
-   * This is typically called after a git branch switch to ensure
-   * the virtual model reflects the checked-out branch.
+   * Binds this virtual model to a different branch's storage directory, discarding all
+   * in-memory state and reloading from the new layout's files on disk.
+   * Used when switching to a different branch whose VSUM directory differs from the current one.
    */
-  void reload(VsumFileSystemLayout newLayout);
+  void reinitialize(VsumFileSystemLayout newLayout);
 
   /**
    * Defines how changes are propagated when passed to {@link #propagateChange(VitruviusChange)}. By

@@ -6,10 +6,10 @@ package tools.vitruv.framework.vsum.branch.data;
  * <p>Each constant maps to one of Git's file status codes so that changelogs produced by
  * Vitruvius use the same terminology as the underlying version control system.
  * <ul>
- *   <li>{@link #ADDED} - Git status code {@code A}: new file created.</li>
- *   <li>{@link #MODIFIED} - Git status code {@code M}: existing file content changed.</li>
- *   <li>{@link #DELETED} - Git status code {@code D}: file removed.</li>
- *   <li>{@link #RENAMED} - Git status code {@code R}: file moved to a new location.</li>
+ *   <li>{@link #ADDED}: Git status code {@code A}, new file created.</li>
+ *   <li>{@link #MODIFIED}: Git status code {@code M}, existing file content changed.</li>
+ *   <li>{@link #DELETED}: Git status code {@code D}, file removed.</li>
+ *   <li>{@link #RENAMED}: Git status code {@code R}, file moved to a new location.</li>
  * </ul>
  */
 public enum FileOperation {

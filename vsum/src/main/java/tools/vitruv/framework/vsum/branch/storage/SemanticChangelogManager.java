@@ -99,36 +99,24 @@ public class SemanticChangelogManager {
   }
 
   /**
-   * Writes the JSON changelog and XMI delta snapshots for the given commit.
+   * Writes the JSON changelog for the given commit using a {@link SemanticChangeBuffer.DrainResult}.
+   * The drain result provides both the accumulated changes and any pre-captured deletion UUID
+   * overrides so that deleted elements are recorded with their correct UUID rather than "unknown".
    *
-   * <p>JSON is written to {@code .vitruvius/changelogs/<branch>/json/<shortSha>.json}.
-   * XMI snapshots are written to {@code .vitruvius/changelogs/<branch>/xmi/<shortSha>.xmi}
-   * for each resource that had changes.
-   *
-   * @param commitSha full 40-character commit SHA.
-   * @param branch branch name.
-   * @param author author name.
-   * @param authorDate date the changes were authored.
-   * @param message commit message.
-   * @param parentShas parent commit SHAs (one for normal commits, two for merge commits).
-   * @param changesByResource map of resource URI -> ordered atomic EChanges, from
-   *     {@link SemanticChangeBuffer#drainChanges()}.
-   * @param activeResources all currently loaded EMF Resources; used to locate the resource
-   *     objects for XMI snapshot writing. May be null or empty to skip XMI.
-   * @param uuidResolver resolver used to convert EObjects to stable UUIDs for JSON output.
-   * @return list of paths of all written files (JSON + any XMI files) for Git staging.
-   * @throws IOException if the JSON file cannot be written (XMI failures are non-fatal).
+   * @param drainResult the result of {@link SemanticChangeBuffer#drainChanges()}, must not be null.
    */
   public List<Path> write(
       String commitSha, String branch, String author, LocalDateTime authorDate,
       String message, List<String> parentShas,
-      Map<String, List<EChange<EObject>>> changesByResource,
+      SemanticChangeBuffer.DrainResult drainResult,
       Collection<Resource> activeResources, UuidResolver uuidResolver) throws IOException {
 
     checkNotNull(commitSha, "commitSha must not be null");
     checkNotNull(branch, "branch must not be null");
-    checkNotNull(changesByResource, "changesByResource must not be null");
+    checkNotNull(drainResult, "drainResult must not be null");
     checkNotNull(uuidResolver, "uuidResolver must not be null");
+
+    Map<String, List<EChange<EObject>>> changesByResource = drainResult.changesByResource();
 
     String shortSha = commitSha.substring(0, Math.min(7, commitSha.length()));
     List<Path> writtenFiles = new ArrayList<>();
@@ -144,7 +132,8 @@ public class SemanticChangelogManager {
     }
 
     // Write JSON changelog
-    EChangeToEntryConverter converter = new EChangeToEntryConverter(uuidResolver, hidResolver);
+    EChangeToEntryConverter converter = new EChangeToEntryConverter(
+        uuidResolver, hidResolver, drainResult.deletionUuidOverrides());
     ChangelogDocument document = buildDocument(
         commitSha, branch, author, authorDate, message, parentShas, changesByResource, converter);
 
@@ -301,7 +290,7 @@ public class SemanticChangelogManager {
 
       ChangelogDocument.FileChangeInfo fileInfo = new ChangelogDocument.FileChangeInfo();
 
-      //detect file operation
+      // detect file operation
       fileInfo.operation = detectOperation(relPath, eChanges, gitDiff).name();
       fileInfo.path = relPath;
       if (diffEntry != null && diffEntry.getChangeType() == DiffEntry.ChangeType.RENAME) {

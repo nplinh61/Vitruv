@@ -23,7 +23,7 @@ import static org.mockito.Mockito.*;
  *
  * <p>The VirtualModel is mocked in all tests so that the actual Vitruvius
  * initialization is not required. The watcher's interaction with the trigger file
- * mechanism and its calls to {@code reload(VsumFileSystemLayout)} are both verified.
+ * mechanism and its calls to {@code reinitialize(VsumFileSystemLayout)} are both verified.
  */
 class VsumReloadWatcherTest {
 
@@ -116,7 +116,7 @@ class VsumReloadWatcherTest {
         // wait for several poll cycles to confirm the watcher polls without side effects.
         Thread.sleep(1500);
 
-        verify(mockBranchVsum, never()).reload(any(VsumFileSystemLayout.class));
+        verify(mockBranchVsum, never()).reinitialize(any(VsumFileSystemLayout.class));
         assertFalse(triggerFile(tempDir).exists(), "trigger file must remain absent when no trigger was created");
 
         watcher.stop();
@@ -125,7 +125,7 @@ class VsumReloadWatcherTest {
     /**
      * Verifies that when a trigger file is created with both new and old branch names,
      * the watcher detects it within the next poll cycle, calls
-     * {@code reload(VsumFileSystemLayout)} exactly once on the VirtualModel, and
+     * {@code reinitialize(VsumFileSystemLayout)} exactly once on the VirtualModel, and
      * deletes the trigger file. The old branch name is forwarded to PostCheckoutHandler
      * so it can use it for vsum state inheritance on first branch visit.
      */

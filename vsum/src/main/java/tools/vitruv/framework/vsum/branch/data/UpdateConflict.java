@@ -62,7 +62,7 @@ public class UpdateConflict {
     public SemanticChangeEntry getTargetEntry() { return targetEntry; }
 
     /**
-     * Returns the severity. Update conflicts are MEDIUM severity -- the data is
+     * Returns the severity. Update conflicts are MEDIUM severity because the data is
      * not lost, but the final value is ambiguous.
      */
     public ConflictSeverity getSeverity() {
@@ -94,7 +94,7 @@ public class UpdateConflict {
                 && sourceEntry.getOrigin() == ChangeOrigin.CONSEQUENTIAL) {
             return targetEntry;
         }
-        return null; // Same origin -- no auto-preference
+        return null; // same origin, no auto-preference
     }
 
     /**

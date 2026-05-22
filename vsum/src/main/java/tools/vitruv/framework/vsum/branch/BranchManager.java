@@ -101,7 +101,7 @@ public class BranchManager {
       var refs = git.branchList().call();
       for (var ref : refs) {
         var name = ref.getName().replace("refs/heads/", "");
-        // Use the branch's own name as parent -- consistent with the post-checkout hook,
+        // Use the branch's own name as parent: consistent with the post-checkout hook,
         // which sets OLD_BRANCH=NEW_BRANCH for master/main (branches that predate this system).
         ensureMetadataExists(name, name);
       }

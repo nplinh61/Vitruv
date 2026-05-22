@@ -48,28 +48,28 @@ import tools.vitruv.framework.vsum.branch.storage.SemanticChangelogManager;
  *
  * <h3>Full pipeline (10 steps)</h3>
  * <ol>
- *   <li><b>Find merge-base</b> - common ancestor commit via JGit
+ *   <li><b>Find merge-base</b>: common ancestor commit via JGit
  *       {@link RevFilter#MERGE_BASE}.</li>
- *   <li><b>Load changelog DTOs</b> - collect diverging commit SHAs and read JSON changelog
+ *   <li><b>Load changelog DTOs</b>: collect diverging commit SHAs and read JSON changelog
  *       files directly from the Git object store (no checkout needed).</li>
- *   <li><b>Direct conflict detection</b> - compare {@code (elementUuid, feature)} pairs
+ *   <li><b>Direct conflict detection</b>: compare {@code (elementUuid, feature)} pairs
  *       across both branches without loading any model. Implemented.</li>
- *   <li><b>Resolution of direct conflicts</b> - ChangeOrigin-based auto-resolution:
+ *   <li><b>Resolution of direct conflicts</b>: ChangeOrigin-based auto-resolution.
  *       ORIGINAL vs CONSEQUENTIAL pairs are auto-resolved; ORIGINAL vs ORIGINAL and UNKNOWN
  *       combinations require human intervention. Implemented.</li>
- *   <li><b>Build footprint dependency graph</b> - nodes per commit, intra-branch ordering
+ *   <li><b>Build footprint dependency graph</b>: nodes per commit, intra-branch ordering
  *       edges, inter-branch edges where a commit's consequential footprint overlaps another
  *       commit's original footprint. Delegated to {@link SemanticMergeEngine}; requires
  *       consequential footprint data captured by the consequential changelog component.</li>
- *   <li><b>Detect cycles</b> - a cycle in the dependency graph means no valid interleaving
- *       exists: consequential conflict, requires human resolution. Delegated to
+ *   <li><b>Detect cycles</b>: a cycle in the dependency graph means no valid interleaving
+ *       exists (consequential conflict, requires human resolution). Delegated to
  *       {@link SemanticMergeEngine}.</li>
- *   <li><b>Topological sort</b> - Kahn's algorithm on the acyclic graph produces the
+ *   <li><b>Topological sort</b>: Kahn's algorithm on the acyclic graph produces the
  *       interleaving order for replay. Delegated to {@link SemanticMergeEngine}.</li>
- *   <li><b>Replay in order</b> - deserialize each commit's original changes into live
+ *   <li><b>Replay in order</b>: deserialize each commit's original changes into live
  *       {@code EChange} objects and apply them through the Vitruvius Reaction engine so
  *       consequential changes are regenerated. Delegated to {@link SemanticMergeEngine}.</li>
- *   <li><b>Iterative refinement</b> - compare actual consequential footprints captured
+ *   <li><b>Iterative refinement</b>: compare actual consequential footprints captured
  *       during replay against stored estimates; rebuild and re-sort if new overlaps appear.
  *       Out of scope for this thesis.</li>
  *   <li><b>Return result</b> - consistent merged model state, or a conflict list when
@@ -525,34 +525,8 @@ public class SemanticConflictDetector {
     // deduplicated via the shared key).
     Map<String, SemanticChangeEntry> deletedByA = buildDeletionMap(changesA);
     Map<String, SemanticChangeEntry> deletedByB = buildDeletionMap(changesB);
-
-    for (SemanticChangeEntry entryB : changesB) {
-      String container = entryB.getContainerUuid();
-      if (container == null) continue;
-      SemanticChangeEntry tombstone = deletedByA.get(container);
-      if (tombstone == null) continue;
-      String key = container + "|null";
-      if (!best.containsKey(key)) {
-        LOGGER.info("Step 3 tombstone: branch A deleted container '{}'; "
-            + "branch B has orphaned change on element '{}' -- HIGH conflict.",
-            container, entryB.getElementUuid());
-        best.put(key, new SemanticConflict(container, null, tombstone, entryB, ConflictSeverity.HIGH));
-      }
-    }
-
-    for (SemanticChangeEntry entryA : changesA) {
-      String container = entryA.getContainerUuid();
-      if (container == null) continue;
-      SemanticChangeEntry tombstone = deletedByB.get(container);
-      if (tombstone == null) continue;
-      String key = container + "|null";
-      if (!best.containsKey(key)) {
-        LOGGER.info("Step 3 tombstone: branch B deleted container '{}'; "
-            + "branch A has orphaned change on element '{}' -- HIGH conflict.",
-            container, entryA.getElementUuid());
-        best.put(key, new SemanticConflict(container, null, entryA, tombstone, ConflictSeverity.HIGH));
-      }
-    }
+    detectTombstoneConflicts(changesB, deletedByA, "branch A", "branch B", true, best);
+    detectTombstoneConflicts(changesA, deletedByB, "branch B", "branch A", false, best);
 
     // --- Cascade DELETE_MODIFY / MODIFY_DELETE detection ---
     // Cross-checks the full deletion map (including cascade descendants) against the set
@@ -560,45 +534,88 @@ public class SemanticConflictDetector {
     // nested descendant of a deleted element was also modified on the other branch,
     // which the pairwise loop and containerUuid tombstone check cannot detect.
     // Skip UUIDs already recorded by the pairwise or tombstone loops (key "uuid|null").
-    Set<String> modifiedUuidsB = extractModifiedUuids(changesB);
-    for (Map.Entry<String, SemanticChangeEntry> entry : deletedByA.entrySet()) {
-      String deletedUuid = entry.getKey();
-      if (!modifiedUuidsB.contains(deletedUuid)) continue;
-      if (best.containsKey(deletedUuid + "|null")
-          || best.containsKey(deletedUuid + "|cascade")) continue;
-      changesB.stream()
-          .filter(e -> deletedUuid.equals(e.getElementUuid())
-              && e.getChangeType() != SemanticChangeType.ELEMENT_CREATED)
-          .findFirst()
-          .ifPresent(modifyingB -> {
-            LOGGER.info("Cascade DELETE_MODIFY: branch A deleted '{}'; branch B modified it",
-                deletedUuid);
-            best.put(deletedUuid + "|cascade",
-                new SemanticConflict(deletedUuid, null,
-                    entry.getValue(), modifyingB, ConflictSeverity.HIGH));
-          });
-    }
-
-    Set<String> modifiedUuidsA = extractModifiedUuids(changesA);
-    for (Map.Entry<String, SemanticChangeEntry> entry : deletedByB.entrySet()) {
-      String deletedUuid = entry.getKey();
-      if (!modifiedUuidsA.contains(deletedUuid)) continue;
-      if (best.containsKey(deletedUuid + "|null")
-          || best.containsKey(deletedUuid + "|cascade")) continue;
-      changesA.stream()
-          .filter(e -> deletedUuid.equals(e.getElementUuid())
-              && e.getChangeType() != SemanticChangeType.ELEMENT_CREATED)
-          .findFirst()
-          .ifPresent(modifyingA -> {
-            LOGGER.info("Cascade MODIFY_DELETE: branch A modified '{}'; branch B deleted it",
-                deletedUuid);
-            best.put(deletedUuid + "|cascade",
-                new SemanticConflict(deletedUuid, null,
-                    modifyingA, entry.getValue(), ConflictSeverity.HIGH));
-          });
-    }
+    detectCascadeConflicts(deletedByA, changesB, "branch A", "branch B", true, best);
+    detectCascadeConflicts(deletedByB, changesA, "branch B", "branch A", false, best);
 
     return new ArrayList<>(best.values());
+  }
+
+  /**
+   * Scans {@code orphanSide} for changes whose {@code containerUuid} is present in
+   * {@code deletionMap}, indicating that a parent element was deleted on the opposing
+   * branch while this branch still has changes targeting a child. Each match is recorded
+   * as a HIGH-severity tombstone conflict.
+   *
+   * @param orphanSide    changes from the branch that still holds the orphaned child changes.
+   * @param deletionMap   deletion map from the opposing branch (built by {@link #buildDeletionMap}).
+   * @param deleterLabel  human-readable label for the branch that deleted the container.
+   * @param orphanLabel   human-readable label for the branch that holds the orphaned changes.
+   * @param deleterIsA    when {@code true}, the deleter's entry is placed as branch-A in the
+   *                      resulting {@link SemanticConflict}; otherwise it is placed as branch-B.
+   * @param best          accumulator map for the highest-severity conflict per key.
+   */
+  private void detectTombstoneConflicts(
+      List<SemanticChangeEntry> orphanSide,
+      Map<String, SemanticChangeEntry> deletionMap,
+      String deleterLabel, String orphanLabel,
+      boolean deleterIsA,
+      Map<String, SemanticConflict> best) {
+    for (SemanticChangeEntry orphanEntry : orphanSide) {
+      String container = orphanEntry.getContainerUuid();
+      if (container == null) continue;
+      SemanticChangeEntry tombstone = deletionMap.get(container);
+      if (tombstone == null) continue;
+      String key = container + "|null";
+      if (!best.containsKey(key)) {
+        LOGGER.info("Step 3 tombstone: {} deleted container '{}'; "
+            + "{} has orphaned change on element '{}' -- HIGH conflict.",
+            deleterLabel, container, orphanLabel, orphanEntry.getElementUuid());
+        SemanticChangeEntry entryA = deleterIsA ? tombstone : orphanEntry;
+        SemanticChangeEntry entryB = deleterIsA ? orphanEntry : tombstone;
+        best.put(key, new SemanticConflict(container, null, entryA, entryB, ConflictSeverity.HIGH));
+      }
+    }
+  }
+
+  /**
+   * Scans {@code deletionMap} for deleted UUIDs that also appear in the modified-UUID set
+   * of {@code modifyingSide}, indicating that one branch deleted an element while the other
+   * modified it. Each match is recorded as a HIGH-severity cascade conflict.
+   *
+   * @param deletionMap   deletion map from the branch that deleted the element.
+   * @param modifyingSide changes from the branch that modified the element.
+   * @param deleterLabel  human-readable label for the branch that deleted.
+   * @param modifyingLabel human-readable label for the branch that modified.
+   * @param deleterIsA    when {@code true}, the deleter's entry is placed as branch-A in the
+   *                      resulting {@link SemanticConflict}; otherwise it is placed as branch-B.
+   * @param best          accumulator map for the highest-severity conflict per key.
+   */
+  private void detectCascadeConflicts(
+      Map<String, SemanticChangeEntry> deletionMap,
+      List<SemanticChangeEntry> modifyingSide,
+      String deleterLabel, String modifyingLabel,
+      boolean deleterIsA,
+      Map<String, SemanticConflict> best) {
+    Set<String> modifiedUuids = extractModifiedUuids(modifyingSide);
+    for (Map.Entry<String, SemanticChangeEntry> entry : deletionMap.entrySet()) {
+      String deletedUuid = entry.getKey();
+      if (!modifiedUuids.contains(deletedUuid)) continue;
+      if (best.containsKey(deletedUuid + "|null")
+          || best.containsKey(deletedUuid + "|cascade")) continue;
+      modifyingSide.stream()
+          .filter(e -> deletedUuid.equals(e.getElementUuid())
+              && e.getChangeType() != SemanticChangeType.ELEMENT_CREATED)
+          .findFirst()
+          .ifPresent(modifyingEntry -> {
+            LOGGER.info("Cascade {}: {} deleted '{}'; {} modified it",
+                deleterIsA ? "DELETE_MODIFY" : "MODIFY_DELETE",
+                deleterLabel, deletedUuid, modifyingLabel);
+            SemanticChangeEntry entryA = deleterIsA ? entry.getValue() : modifyingEntry;
+            SemanticChangeEntry entryB = deleterIsA ? modifyingEntry : entry.getValue();
+            best.put(deletedUuid + "|cascade",
+                new SemanticConflict(deletedUuid, null, entryA, entryB, ConflictSeverity.HIGH));
+          });
+    }
   }
 
   /**

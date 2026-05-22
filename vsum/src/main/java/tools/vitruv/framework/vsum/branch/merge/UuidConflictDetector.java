@@ -163,17 +163,8 @@ public class UuidConflictDetector {
             // RemoveEReference from a containment feature removes the child element.
             // The oldValueId contains the HierarchicalId of the removed element --
             // we need to find its UUID from other DTOs in the same changelog.
-            if ("RemoveEReference".equals(dto.changeType) && dto.oldValueId != null) {
-                for (ChangeDto other : dtos) {
-                    if (other.affectedElementUuid != null
-                            && other.affectedElementId != null
-                            && other.affectedElementId.equals(dto.oldValueId)) {
-                        deleted.add(other.affectedElementUuid);
-                        break;
-                    }
-                }
-            }
-            if ("RemoveRootEObject".equals(dto.changeType) && dto.oldValueId != null) {
+            if (("RemoveEReference".equals(dto.changeType) || "RemoveRootEObject".equals(dto.changeType))
+                    && dto.oldValueId != null) {
                 for (ChangeDto other : dtos) {
                     if (other.affectedElementUuid != null
                             && other.affectedElementId != null

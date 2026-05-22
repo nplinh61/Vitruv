@@ -6,9 +6,9 @@
  *
  * <p>Contains:
  * <ul>
- *   <li>{@link tools.vitruv.framework.vsum.versioning.VersioningService}:creates snapshots,
+ *   <li>{@link tools.vitruv.framework.vsum.versioning.VersioningService}: creates snapshots,
  *       lists version history, and performs rollbacks to a given commit SHA.</li>
- *   <li>{@link tools.vitruv.framework.vsum.versioning.VersioningException}:checked
+ *   <li>{@link tools.vitruv.framework.vsum.versioning.VersioningException}: checked
  *       exception for versioning and rollback failures.</li>
  * </ul>
  */

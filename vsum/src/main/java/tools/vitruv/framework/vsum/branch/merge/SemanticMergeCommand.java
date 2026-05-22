@@ -51,28 +51,10 @@ public class SemanticMergeCommand {
 
         LOGGER.info("Semantic merge: {} -> {}", sourceBranch, targetBranch);
 
-        String oursSha;
-        String theirsSha;
-        try (Git git = Git.open(repoRoot.toFile())) {
-            Ref oursRef = git.getRepository().findRef(targetBranch);
-            Ref theirsRef = git.getRepository().findRef(sourceBranch);
-
-            if (oursRef == null) {
-                throw new IOException("Cannot resolve target branch: " + targetBranch);
-            }
-            if (theirsRef == null) {
-                throw new IOException("Cannot resolve source branch: " + sourceBranch);
-            }
-
-            oursSha = oursRef.getObjectId().getName();
-            theirsSha = theirsRef.getObjectId().getName();
-        }
-
-        GitStateLoader loader = new GitStateLoader(repoRoot);
-        String baseSha = loader.findMergeBase(oursSha, theirsSha);
-        if (baseSha == null) {
-            throw new IOException("No common ancestor between " + targetBranch + " and " + sourceBranch);
-        }
+        String[] shas = resolveShasAndBase(repoRoot, targetBranch, sourceBranch);
+        String oursSha = shas[0];
+        String theirsSha = shas[1];
+        String baseSha = shas[2];
 
         SemanticMergeEngine engine = new SemanticMergeEngine(
                 repoRoot, specs, interactionProvider, conflictResolutionProvider);
@@ -110,28 +92,10 @@ public class SemanticMergeCommand {
 
         LOGGER.info("Bidirectional semantic merge: {} <-> {}", branchA, branchB);
 
-        String branchASha;
-        String branchBSha;
-        try (Git git = Git.open(repoRoot.toFile())) {
-            Ref refA = git.getRepository().findRef(branchA);
-            Ref refB = git.getRepository().findRef(branchB);
-
-            if (refA == null) {
-                throw new IOException("Cannot resolve branch: " + branchA);
-            }
-            if (refB == null) {
-                throw new IOException("Cannot resolve branch: " + branchB);
-            }
-
-            branchASha = refA.getObjectId().getName();
-            branchBSha = refB.getObjectId().getName();
-        }
-
-        GitStateLoader loader = new GitStateLoader(repoRoot);
-        String baseSha = loader.findMergeBase(branchASha, branchBSha);
-        if (baseSha == null) {
-            throw new IOException("No common ancestor between " + branchA + " and " + branchB);
-        }
+        String[] shas = resolveShasAndBase(repoRoot, branchA, branchB);
+        String branchASha = shas[0];
+        String branchBSha = shas[1];
+        String baseSha = shas[2];
 
         SemanticMergeEngine engine = new SemanticMergeEngine(
                 repoRoot, specs, interactionProvider, conflictResolutionProvider);
@@ -184,28 +148,10 @@ public class SemanticMergeCommand {
         LOGGER.info("Interleaving semantic merge: {} <-> {} (intra-branch: {})",
                 branchA, branchB, intraBranchMode);
 
-        String branchASha;
-        String branchBSha;
-        try (Git git = Git.open(repoRoot.toFile())) {
-            Ref refA = git.getRepository().findRef(branchA);
-            Ref refB = git.getRepository().findRef(branchB);
-
-            if (refA == null) {
-                throw new IOException("Cannot resolve branch: " + branchA);
-            }
-            if (refB == null) {
-                throw new IOException("Cannot resolve branch: " + branchB);
-            }
-
-            branchASha = refA.getObjectId().getName();
-            branchBSha = refB.getObjectId().getName();
-        }
-
-        GitStateLoader loader = new GitStateLoader(repoRoot);
-        String baseSha = loader.findMergeBase(branchASha, branchBSha);
-        if (baseSha == null) {
-            throw new IOException("No common ancestor between " + branchA + " and " + branchB);
-        }
+        String[] shas = resolveShasAndBase(repoRoot, branchA, branchB);
+        String branchASha = shas[0];
+        String branchBSha = shas[1];
+        String baseSha = shas[2];
 
         SemanticMergeEngine engine = new SemanticMergeEngine(
                 repoRoot, specs, interactionProvider, conflictResolutionProvider, intraBranchMode);
@@ -213,5 +159,24 @@ public class SemanticMergeCommand {
 
         LOGGER.info("Interleaving merge result: {}", result);
         return result;
+    }
+
+    private static String[] resolveShasAndBase(Path repoRoot, String branchA, String branchB)
+            throws IOException {
+        String shaA;
+        String shaB;
+        try (Git git = Git.open(repoRoot.toFile())) {
+            Ref refA = git.getRepository().findRef(branchA);
+            Ref refB = git.getRepository().findRef(branchB);
+            if (refA == null) throw new IOException("Cannot resolve branch: " + branchA);
+            if (refB == null) throw new IOException("Cannot resolve branch: " + branchB);
+            shaA = refA.getObjectId().getName();
+            shaB = refB.getObjectId().getName();
+        }
+        String baseSha = new GitStateLoader(repoRoot).findMergeBase(shaA, shaB);
+        if (baseSha == null) {
+            throw new IOException("No common ancestor between " + branchA + " and " + branchB);
+        }
+        return new String[]{ shaA, shaB, baseSha };
     }
 }

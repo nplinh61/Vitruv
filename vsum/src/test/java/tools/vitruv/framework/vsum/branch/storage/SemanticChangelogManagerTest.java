@@ -20,6 +20,8 @@ import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 
+import static tools.vitruv.framework.vsum.branch.storage.SemanticChangeBuffer.DrainResult;
+
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
@@ -68,7 +70,7 @@ class SemanticChangelogManagerTest {
         @Test
         @DisplayName("write creates JSON at branch-scoped path")
         void writeCreatesJsonAtBranchScopedPath() throws IOException {
-            var written = manager.write(COMMIT_SHA, BRANCH, AUTHOR, DATE, MESSAGE, List.of(), changesByResource(), null, uuidResolver);
+            var written = manager.write(COMMIT_SHA, BRANCH, AUTHOR, DATE, MESSAGE, List.of(), DrainResult.of(changesByResource()), null, uuidResolver);
 
             assertEquals(1, written.size(), "only JSON returned when activeResources is null");
             Path expected = repoRoot.resolve(".vitruvius").resolve("changelogs").resolve(BRANCH).resolve("json").resolve(SHORT_SHA + ".json");
@@ -85,7 +87,7 @@ class SemanticChangelogManagerTest {
             Path jsonDir = repoRoot.resolve(".vitruvius/changelogs/" + BRANCH + "/json");
             assertFalse(Files.exists(jsonDir));
 
-            manager.write(COMMIT_SHA, BRANCH, AUTHOR, DATE, MESSAGE, List.of(), changesByResource(), null, uuidResolver);
+            manager.write(COMMIT_SHA, BRANCH, AUTHOR, DATE, MESSAGE, List.of(), DrainResult.of(changesByResource()), null, uuidResolver);
 
             assertTrue(Files.isDirectory(jsonDir));
         }
@@ -96,8 +98,8 @@ class SemanticChangelogManagerTest {
         @Test
         @DisplayName("Different branches produce files in separate directories")
         void differentBranchesProduceFilesInSeparateDirectories() throws IOException {
-            manager.write(COMMIT_SHA, "main", AUTHOR, DATE, MESSAGE, List.of(), changesByResource(), null, uuidResolver);
-            manager.write(COMMIT_SHA, "feature-x", AUTHOR, DATE, MESSAGE, List.of(), changesByResource(), null, uuidResolver);
+            manager.write(COMMIT_SHA, "main", AUTHOR, DATE, MESSAGE, List.of(), DrainResult.of(changesByResource()), null, uuidResolver);
+            manager.write(COMMIT_SHA, "feature-x", AUTHOR, DATE, MESSAGE, List.of(), DrainResult.of(changesByResource()), null, uuidResolver);
 
             assertTrue(Files.exists(repoRoot.resolve(".vitruvius/changelogs/main/json/" + SHORT_SHA + ".json")));
             assertTrue(Files.exists(repoRoot.resolve(".vitruvius/changelogs/feature-x/json/" + SHORT_SHA + ".json")));
@@ -109,7 +111,7 @@ class SemanticChangelogManagerTest {
         @Test
         @DisplayName("File name prefix is the first 7 characters of the full SHA")
         void fileNamePrefixIsFirst7Characters() throws IOException {
-            manager.write(COMMIT_SHA, BRANCH, AUTHOR, DATE, MESSAGE, List.of(), changesByResource(), null, uuidResolver);
+            manager.write(COMMIT_SHA, BRANCH, AUTHOR, DATE, MESSAGE, List.of(), DrainResult.of(changesByResource()), null, uuidResolver);
 
             assertTrue(Files.exists(repoRoot.resolve(".vitruvius/changelogs/" + BRANCH + "/json/abc1234.json")));
         }
@@ -127,7 +129,7 @@ class SemanticChangelogManagerTest {
         @DisplayName("JSON commit block contains all metadata fields including parent SHAs")
         void jsonContainsAllCommitMetadataFields() throws IOException {
             List<String> parentShas = List.of("parent111", "parent222");
-            manager.write(COMMIT_SHA, BRANCH, AUTHOR, DATE, MESSAGE, parentShas, changesByResource(), null, uuidResolver);
+            manager.write(COMMIT_SHA, BRANCH, AUTHOR, DATE, MESSAGE, parentShas, DrainResult.of(changesByResource()), null, uuidResolver);
 
             var doc = readDocument();
             assertEquals("1.0", doc.formatVersion);
@@ -146,7 +148,7 @@ class SemanticChangelogManagerTest {
         @Test
         @DisplayName("JSON summary reflects total file and semantic change counts")
         void jsonSummaryReflectsTotals() throws IOException {
-            manager.write(COMMIT_SHA, BRANCH, AUTHOR, DATE, MESSAGE, List.of(), changesByResource(), null, uuidResolver);
+            manager.write(COMMIT_SHA, BRANCH, AUTHOR, DATE, MESSAGE, List.of(), DrainResult.of(changesByResource()), null, uuidResolver);
 
             var doc = readDocument();
             assertEquals(1, doc.summary.totalFileChanges);
@@ -159,7 +161,7 @@ class SemanticChangelogManagerTest {
         @Test
         @DisplayName("Empty changesByResource produces valid JSON with zero totals")
         void emptyChangesProducesValidJson() throws IOException {
-            manager.write(COMMIT_SHA, BRANCH, AUTHOR, DATE, MESSAGE, List.of(), Map.of(), null, uuidResolver);
+            manager.write(COMMIT_SHA, BRANCH, AUTHOR, DATE, MESSAGE, List.of(), DrainResult.of(Map.of()), null, uuidResolver);
 
             var doc = readDocument();
             assertNotNull(doc);
@@ -186,7 +188,7 @@ class SemanticChangelogManagerTest {
             when(element.eClass()).thenReturn(null);
             when(uuidResolver.hasUuid(element)).thenReturn(false);
 
-            manager.write(COMMIT_SHA, BRANCH, AUTHOR, DATE, MESSAGE, List.of(), changes, null, uuidResolver);
+            manager.write(COMMIT_SHA, BRANCH, AUTHOR, DATE, MESSAGE, List.of(), DrainResult.of(changes), null, uuidResolver);
 
             var doc = readDocument();
             assertEquals(2, doc.fileChanges.size());
@@ -203,7 +205,7 @@ class SemanticChangelogManagerTest {
         @Test
         @DisplayName("read returns the document written by write (round-trip)")
         void readReturnsDocumentWrittenByWrite() throws IOException {
-            manager.write(COMMIT_SHA, BRANCH, AUTHOR, DATE, MESSAGE, List.of(), changesByResource(), null, uuidResolver);
+            manager.write(COMMIT_SHA, BRANCH, AUTHOR, DATE, MESSAGE, List.of(), DrainResult.of(changesByResource()), null, uuidResolver);
 
             var doc = manager.read(BRANCH, SHORT_SHA);
 
@@ -228,7 +230,7 @@ class SemanticChangelogManagerTest {
         @Test
         @DisplayName("read returns null when SHA exists on a different branch")
         void readReturnsNullForWrongBranch() throws IOException {
-            manager.write(COMMIT_SHA, "main", AUTHOR, DATE, MESSAGE, List.of(), changesByResource(), null, uuidResolver);
+            manager.write(COMMIT_SHA, "main", AUTHOR, DATE, MESSAGE, List.of(), DrainResult.of(changesByResource()), null, uuidResolver);
 
             assertNull(manager.read("feature-x", SHORT_SHA));
         }
@@ -244,7 +246,7 @@ class SemanticChangelogManagerTest {
         @Test
         @DisplayName("null activeResources skips XMI writing and returns only the JSON path")
         void nullActiveResourcesSkipsXmi() throws IOException {
-            var written = manager.write(COMMIT_SHA, BRANCH, AUTHOR, DATE, MESSAGE, List.of(), changesByResource(), null, uuidResolver);
+            var written = manager.write(COMMIT_SHA, BRANCH, AUTHOR, DATE, MESSAGE, List.of(), DrainResult.of(changesByResource()), null, uuidResolver);
 
             assertEquals(1, written.size());
         }
@@ -255,7 +257,7 @@ class SemanticChangelogManagerTest {
         @Test
         @DisplayName("Empty activeResources list skips XMI writing")
         void emptyActiveResourcesSkipsXmi() throws IOException {
-            var written = manager.write(COMMIT_SHA, BRANCH, AUTHOR, DATE, MESSAGE, List.of(), changesByResource(), List.of(), uuidResolver);
+            var written = manager.write(COMMIT_SHA, BRANCH, AUTHOR, DATE, MESSAGE, List.of(), DrainResult.of(changesByResource()), List.of(), uuidResolver);
 
             assertEquals(1, written.size());
         }
@@ -270,7 +272,7 @@ class SemanticChangelogManagerTest {
             Resource resource = mock(Resource.class);
             when(resource.getURI()).thenReturn(URI.createURI("file:///unrelated/path.xmi"));
 
-            var written = manager.write(COMMIT_SHA, BRANCH, AUTHOR, DATE, MESSAGE, List.of(), changesByResource(), List.of(resource), uuidResolver);
+            var written = manager.write(COMMIT_SHA, BRANCH, AUTHOR, DATE, MESSAGE, List.of(), DrainResult.of(changesByResource()), List.of(resource), uuidResolver);
 
             assertEquals(1, written.size(), "only JSON must be returned when no resource matches");
         }
@@ -282,10 +284,10 @@ class SemanticChangelogManagerTest {
     @Test
     @DisplayName("write throws NullPointerException for null required parameters")
     void writeThrowsForNullRequiredParameters() {
-        assertThrows(NullPointerException.class, () -> manager.write(null, BRANCH, AUTHOR, DATE, MESSAGE, List.of(), Map.of(), null, uuidResolver));
-        assertThrows(NullPointerException.class, () -> manager.write(COMMIT_SHA, null, AUTHOR, DATE, MESSAGE, List.of(), Map.of(), null, uuidResolver));
+        assertThrows(NullPointerException.class, () -> manager.write(null, BRANCH, AUTHOR, DATE, MESSAGE, List.of(), DrainResult.of(Map.of()), null, uuidResolver));
+        assertThrows(NullPointerException.class, () -> manager.write(COMMIT_SHA, null, AUTHOR, DATE, MESSAGE, List.of(), DrainResult.of(Map.of()), null, uuidResolver));
         assertThrows(NullPointerException.class, () -> manager.write(COMMIT_SHA, BRANCH, AUTHOR, DATE, MESSAGE, List.of(), null, null, uuidResolver));
-        assertThrows(NullPointerException.class, () -> manager.write(COMMIT_SHA, BRANCH, AUTHOR, DATE, MESSAGE, List.of(), Map.of(), null, null));
+        assertThrows(NullPointerException.class, () -> manager.write(COMMIT_SHA, BRANCH, AUTHOR, DATE, MESSAGE, List.of(), DrainResult.of(Map.of()), null, null));
     }
 
     @SuppressWarnings("unchecked")

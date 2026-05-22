@@ -103,10 +103,6 @@ public class DeletionConflict {
      *   <li>10+ lost updates → {@link ConflictSeverity#CRITICAL}</li>
      * </ul>
      */
-    /**
-     * Computes the {@link ConflictSeverity} of this conflict based on the
-     * number of updates that would be lost if the deletion is accepted, using default thresholds.
-     */
     public ConflictSeverity getSeverity() {
         return ConflictSeverity.fromLostUpdateCount(getLostUpdateCount());
     }

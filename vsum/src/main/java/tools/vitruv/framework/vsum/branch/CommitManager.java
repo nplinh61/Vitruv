@@ -10,7 +10,13 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import org.apache.logging.log4j.LogManager;
@@ -299,7 +305,7 @@ public class CommitManager {
             "Nothing to commit, no modified model files found");
       }
 
-      // perform commit -- skip pre-commit and commit-msg hooks (REST path manages everything).
+      // perform commit: skip pre-commit and commit-msg hooks (REST path manages everything).
       git.commit().setMessage(message).setNoVerify(true).call();
 
       // Re-read HEAD: post-commit hook is NOT skipped by --no-verify and may amend the commit
@@ -511,10 +517,9 @@ public class CommitManager {
       Git git, String commitSha, String branch, String authorName,
       LocalDateTime authorDate, RevCommit revCommit) {
     try {
-      Map<String, List<EChange<EObject>>> changesByResource =
-          changeBuffer.drainChanges();
+      SemanticChangeBuffer.DrainResult drainResult = changeBuffer.drainChanges();
 
-      if (changesByResource.isEmpty()) {
+      if (drainResult.changesByResource().isEmpty()) {
         LOGGER.debug("No semantic changes to write for commit {}",
             commitSha.substring(0, 7));
         return;
@@ -533,7 +538,7 @@ public class CommitManager {
       List<Path> writtenFiles = changelogManager.write(
           commitSha, branch, authorName, authorDate,
           revCommit.getFullMessage().trim(),
-          parentShas, changesByResource, activeResources, uuidResolverSupplier.get());
+          parentShas, drainResult, activeResources, uuidResolverSupplier.get());
 
       // Stage all written changelog files (JSON + XMI) so they are tracked by Git
       for (Path file : writtenFiles) {

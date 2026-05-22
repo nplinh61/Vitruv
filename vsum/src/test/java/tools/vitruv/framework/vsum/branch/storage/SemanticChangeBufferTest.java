@@ -75,7 +75,7 @@ class SemanticChangeBufferTest {
     @Test
     @DisplayName("drainChanges on empty buffer returns empty map")
     void drainOnEmptyBufferReturnsEmptyMap() {
-        assertTrue(buffer.drainChanges().isEmpty());
+        assertTrue(buffer.drainChanges().changesByResource().isEmpty());
     }
 
     /**
@@ -103,7 +103,7 @@ class SemanticChangeBufferTest {
 
         assertTrue(buffer.hasChanges());
         assertEquals(1, buffer.size());
-        var result = buffer.drainChanges();
+        var result = buffer.drainChanges().changesByResource();
         assertTrue(result.containsKey("file:///models/A.xmi"));
         assertEquals(1, result.get("file:///models/A.xmi").size());
     }
@@ -123,7 +123,7 @@ class SemanticChangeBufferTest {
 
         buffer.finishedChangePropagation(List.of(propagatedChange));
 
-        var result = buffer.drainChanges();
+        var result = buffer.drainChanges().changesByResource();
         assertTrue(result.containsKey("file:///models/A.xmi"));
         assertEquals(1, result.get("file:///models/A.xmi").size());
     }
@@ -144,7 +144,7 @@ class SemanticChangeBufferTest {
         buffer.finishedChangePropagation(List.of(propagatedChangeB));
 
         assertEquals(2, buffer.size());
-        assertEquals(2, buffer.drainChanges().get("file:///models/A.xmi").size());
+        assertEquals(2, buffer.drainChanges().changesByResource().get("file:///models/A.xmi").size());
     }
 
     /**
@@ -159,7 +159,7 @@ class SemanticChangeBufferTest {
 
         buffer.finishedChangePropagation(List.of(propagatedChange));
 
-        var result = buffer.drainChanges();
+        var result = buffer.drainChanges().changesByResource();
         assertEquals(2, result.size());
         assertEquals(1, result.get("file:///models/A.xmi").size());
         assertEquals(1, result.get("file:///models/B.xmi").size());
@@ -176,11 +176,11 @@ class SemanticChangeBufferTest {
         setupPropagatedChange(propagatedChange, originalChangeA, List.of(featureChange));
         buffer.finishedChangePropagation(List.of(propagatedChange));
 
-        var firstDrain = buffer.drainChanges();
+        var firstDrain = buffer.drainChanges().changesByResource();
         assertFalse(firstDrain.isEmpty());
         assertFalse(buffer.hasChanges(), "buffer must be empty after drain");
         assertEquals(0, buffer.size());
-        assertTrue(buffer.drainChanges().isEmpty(), "second drain must return empty map");
+        assertTrue(buffer.drainChanges().changesByResource().isEmpty(), "second drain must return empty map");
     }
 
     /**
@@ -193,7 +193,7 @@ class SemanticChangeBufferTest {
         setupPropagatedChange(propagatedChange, originalChangeA, List.of(featureChange));
         buffer.finishedChangePropagation(List.of(propagatedChange));
 
-        var result = buffer.drainChanges();
+        var result = buffer.drainChanges().changesByResource();
         assertThrows(UnsupportedOperationException.class, () -> result.put("k", List.of()));
     }
 
@@ -214,7 +214,7 @@ class SemanticChangeBufferTest {
         buffer.finishedChangePropagation(List.of(propagatedChangeB));
 
         assertEquals(1, buffer.size());
-        assertTrue(buffer.drainChanges().containsKey("file:///models/B.xmi"));
+        assertTrue(buffer.drainChanges().changesByResource().containsKey("file:///models/B.xmi"));
     }
 
     /**
@@ -230,7 +230,7 @@ class SemanticChangeBufferTest {
 
         buffer.finishedChangePropagation(List.of(propagatedChange));
 
-        assertTrue(buffer.drainChanges().containsKey("unknown-resource"));
+        assertTrue(buffer.drainChanges().changesByResource().containsKey("unknown-resource"));
     }
 
     private void setupFeatureChange(FeatureEChange<EObject, EStructuralFeature> change,

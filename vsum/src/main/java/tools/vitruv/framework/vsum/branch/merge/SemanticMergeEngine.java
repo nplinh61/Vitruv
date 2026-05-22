@@ -1281,21 +1281,6 @@ public class SemanticMergeEngine {
     }
 
     /**
-     * Replays EChange<HierarchicalId> objects onto a target VSUM.
-     *
-     * <p>Follows the same pattern as {@code IdentityMappingViewType.commitViewChanges()}:
-     * <ol>
-     *   <li>Create a COPY of the VSUM's model resources into a fresh ResourceSet</li>
-     *   <li>Copy UUID mappings from the VSUM's resolver to the copy's resolver</li>
-     *   <li>{@code resolveAndApply} changes on the COPY (not the VSUM directly)</li>
-     *   <li>{@code assignIds} on the copy to convert EObject→Uuid</li>
-     *   <li>{@code propagateChange} on the VSUM (applies changes to real models + fires reactions)</li>
-     * </ol>
-     *
-     * <p>This separation ensures that changes are not double-applied: resolveAndApply
-     * modifies the copy, and propagateChange modifies the VSUM.
-     */
-    /**
      * Replays deserialized EChanges onto a target VSUM through a ChangeRecordingView.
      *
      * <p>Changes are applied using EMF's reflective API (eSet, eGet, list.add) rather
@@ -1386,30 +1371,6 @@ public class SemanticMergeEngine {
     }
 
     /**
-     * Applies a deserialized EChange to the view's model using EMF's reflective API.
-     * Direct calls to eSet/eGet/list.add trigger proper EMF notifications that the
-     * ChangeRecorder captures (unlike ApplyEChangeSwitch which uses EditingDomain Commands).
-     *
-     * <h4>Deletion handling</h4>
-     * <ul>
-     *   <li>{@code DeleteEObject}: Tolerates already-removed elements (returns silently).
-     *       This happens when a prior {@code RemoveEReference} in the same transaction
-     *       already detached the element from the containment tree.</li>
-     *   <li>{@code RemoveEReference}: Tolerates unresolvable containers (logs and returns).
-     *       The container may have been deleted by a cascade or prior change.</li>
-     *   <li>{@code ReplaceSingleValuedEAttribute}: Throws {@link IllegalStateException}
-     *       if the target element cannot be resolved -- this is a guard failure indicating
-     *       the element was deleted on the target branch. The caller catches this and
-     *       reports a {@link MergeConflict.ConflictType#REPLAY_APPLICABILITY} conflict.</li>
-     * </ul>
-     */
-    /**
-     * Resolves an element by HierarchicalId, falling back to a prebuilt UUID-to-EObject
-     * map if the path fails. UUID-based fallback is needed during interleaving replay:
-     * when replaying from the common ancestor, reactions from earlier transactions may
-     * have changed model structure, making the HierarchicalId paths invalid.
-     */
-    /**
      * Remaps a cache ID from the deserializer's placeholder to the resolver's actual ID.
      * Non-cache IDs are returned unchanged.
      */
@@ -1477,6 +1438,24 @@ public class SemanticMergeEngine {
         return null;
     }
 
+    /**
+     * Applies a deserialized EChange to the view's model using EMF's reflective API.
+     * Direct calls to eSet/eGet/list.add trigger proper EMF notifications that the
+     * ChangeRecorder captures (unlike ApplyEChangeSwitch which uses EditingDomain Commands).
+     *
+     * <h4>Deletion handling</h4>
+     * <ul>
+     *   <li>{@code DeleteEObject}: Tolerates already-removed elements (returns silently).
+     *       This happens when a prior {@code RemoveEReference} in the same transaction
+     *       already detached the element from the containment tree.</li>
+     *   <li>{@code RemoveEReference}: Tolerates unresolvable containers (logs and returns).
+     *       The container may have been deleted by a cascade or prior change.</li>
+     *   <li>{@code ReplaceSingleValuedEAttribute}: Throws {@link IllegalStateException}
+     *       if the target element cannot be resolved; this is a guard failure indicating
+     *       the element was deleted on the target branch. The caller catches this and
+     *       reports a {@link MergeConflict.ConflictType#REPLAY_APPLICABILITY} conflict.</li>
+     * </ul>
+     */
     @SuppressWarnings("unchecked")
     private static void applyChangeReflectively(EChange<HierarchicalId> eChange,
                                           tools.vitruv.change.atomic.hid.internal.HierarchicalIdResolver idResolver,
@@ -1521,7 +1500,7 @@ public class SemanticMergeEngine {
         } else if (eChange instanceof tools.vitruv.change.atomic.feature.reference.RemoveEReference<HierarchicalId> rr) {
             try {
                 EObject container = resolveElement(remapCacheId(rr.getAffectedElement(), cacheIdRemap), idResolver, hidFallback);
-                if (container == null) throw new Exception("Container not found");
+                if (container == null) throw new IllegalStateException("Container not found");
                 var list = (List<EObject>) container.eGet(rr.getAffectedFeature());
                 if (rr.getIndex() >= 0 && rr.getIndex() < list.size()) {
                     list.remove(rr.getIndex());
@@ -2046,9 +2025,7 @@ public class SemanticMergeEngine {
         return conflicts;
     }
 
-    // ═══════════════════════════════════════════════════════════════
     // Trace formatting helpers
-    // ═══════════════════════════════════════════════════════════════
 
     /**
      * Formats a ChangeDto into a human-readable description for trace output.

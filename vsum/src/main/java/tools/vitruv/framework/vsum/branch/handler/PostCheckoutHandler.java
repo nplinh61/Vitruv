@@ -90,13 +90,13 @@ public class PostCheckoutHandler {
       newLayout.prepare();
       newLayout.inheritFromBranchIfEmpty(oldBranch);
 
-      LOGGER.debug("reloading VirtualModel for branch '{}'", newBranch);
-      virtualModel.reload(newLayout);
-      LOGGER.info("VirtualModel reloaded successfully for branch '{}'", newBranch);
+      LOGGER.debug("reinitializing VirtualModel for branch '{}'", newBranch);
+      virtualModel.reinitialize(newLayout);
+      LOGGER.info("VirtualModel reinitialized successfully for branch '{}'", newBranch);
 
     } catch (Exception e) {
       throw new BranchOperationException(
-          "failed to reload VirtualModel after switching to branch '" + newBranch + "'", e);
+          "failed to reinitialize VirtualModel after switching to branch '" + newBranch + "'", e);
     }
   }
 }

@@ -3,7 +3,7 @@ package tools.vitruv.framework.vsum.branch.storage;
 /**
  * Classifies the origin of a model change to support the Vitruvius conflict
  * resolution rule: <em>original changes are preferred to consequential
- * changes.
+ * changes.</em>
  *
  * An original change is one that a human developer physically typed
  * into an editor. A consequential change is an automatic update that
@@ -20,7 +20,7 @@ public enum ChangeOrigin {
 
     /**
      * A change that was physically made by a human developer in an editor.
-     * have the highest conflict-resolution priority.
+     * These have the highest conflict-resolution priority.
      */
     ORIGINAL("Human-made change from an editor", 10),
 
@@ -60,5 +60,15 @@ public enum ChangeOrigin {
      */
     public int getPriority() {
         return priority;
+    }
+
+    /**
+     * Parses a string value to the matching constant. Returns {@link #UNKNOWN}
+     * for any value that is not recognized.
+     */
+    public static ChangeOrigin fromString(String value) {
+        if ("consequential".equalsIgnoreCase(value)) return CONSEQUENTIAL;
+        if ("original".equalsIgnoreCase(value)) return ORIGINAL;
+        return UNKNOWN;
     }
 }

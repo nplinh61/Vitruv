@@ -1,7 +1,6 @@
 package tools.vitruv.framework.vsum.branch.merge;
 
 import java.nio.file.Path;
-import java.util.Collections;
 import java.util.List;
 
 import tools.vitruv.change.atomic.EChange;
@@ -85,12 +84,10 @@ public class SemanticMergeResult {
                                 Path mergedStateFolder,
                                 MergeDirection mergeDirection) {
         this.status = status;
-        this.conflicts = Collections.unmodifiableList(List.copyOf(conflicts));
-        this.appliedChanges = Collections.unmodifiableList(List.copyOf(appliedChanges));
-        this.appliedResolutions = appliedResolutions != null
-                ? Collections.unmodifiableList(List.copyOf(appliedResolutions)) : List.of();
-        this.warnings = warnings != null
-                ? Collections.unmodifiableList(List.copyOf(warnings)) : List.of();
+        this.conflicts = List.copyOf(conflicts);
+        this.appliedChanges = List.copyOf(appliedChanges);
+        this.appliedResolutions = appliedResolutions != null ? List.copyOf(appliedResolutions) : List.of();
+        this.warnings = warnings != null ? List.copyOf(warnings) : List.of();
         this.mergedStateFolder = mergedStateFolder;
         this.mergeDirection = mergeDirection != null ? mergeDirection : MergeDirection.FORWARD;
     }

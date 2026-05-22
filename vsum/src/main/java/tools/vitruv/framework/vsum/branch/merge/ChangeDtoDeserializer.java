@@ -96,8 +96,6 @@ public class ChangeDtoDeserializer {
         };
     }
 
-    // === Object existence changes ===
-
     /**
      * CreateEObject must use a cache-prefixed HierarchicalId because the resolver
      * creates a fresh EObject and checks its auto-generated ID matches.
@@ -131,8 +129,6 @@ public class ChangeDtoDeserializer {
         return c;
     }
 
-    // === Root changes ===
-
     private EChange<HierarchicalId> deserializeInsertRoot(SemanticChangeLog.ChangeDto dto) {
         InsertRootEObject<HierarchicalId> c = RootFactory.eINSTANCE.createInsertRootEObject();
         c.setNewValue(hidOrCache(dto.newValueId));
@@ -148,8 +144,6 @@ public class ChangeDtoDeserializer {
         c.setIndex(dto.index);
         return c;
     }
-
-    // === Reference changes ===
 
     @SuppressWarnings("unchecked")
     private EChange<HierarchicalId> deserializeInsertReference(SemanticChangeLog.ChangeDto dto) {
@@ -171,8 +165,6 @@ public class ChangeDtoDeserializer {
         return (EChange<HierarchicalId>) (EChange<?>) FACTORY.createReplaceSingleReferenceChange(
                 hid(dto.affectedElementId), ref, hidOrCache(dto.oldValueId), hidOrCache(dto.newValueId));
     }
-
-    // === Attribute changes ===
 
     @SuppressWarnings("unchecked")
     private EChange<HierarchicalId> deserializeInsertAttribute(SemanticChangeLog.ChangeDto dto) {
@@ -198,8 +190,6 @@ public class ChangeDtoDeserializer {
         return (EChange<HierarchicalId>) (EChange<?>) FACTORY.createReplaceSingleAttributeChange(
                 hid(dto.affectedElementId), attr, oldVal, newVal);
     }
-
-    // === Resolution helpers ===
 
     /**
      * Resolves an ID to a HierarchicalId using the normalized resource-based path.

@@ -11,7 +11,6 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
-import java.util.Map;
 import java.util.function.Supplier;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
@@ -179,13 +178,13 @@ public class PostCommitHandler {
         parentShas.add(parent.getName());
       }
 
-      Map<String, List<EChange<EObject>>> changesByResource = changeBuffer.drainChanges();
+      SemanticChangeBuffer.DrainResult drainResult = changeBuffer.drainChanges();
       Collection<Resource> activeResources = resourceSupplier.get();
 
       List<Path> writtenFiles = changelogManager.write(
           commitSha, branch, author.getName(), authorDate,
           revCommit.getFullMessage().trim(),
-          parentShas, changesByResource, activeResources, uuidResolverSupplier.get());
+          parentShas, drainResult, activeResources, uuidResolverSupplier.get());
 
       // Commit directly to the target branch ref using low-level JGit object insertion.
       // This bypasses CommitCommand so no post-commit hook runs, and the commit always

@@ -5,11 +5,11 @@ package tools.vitruv.framework.vsum.branch.data;
  *
  * <p>Determined by the types of changes involved:
  * <ul>
- *   <li>{@link #LOW} – independent additions or insertions; unlikely to break consistency,
+ *   <li>{@link #LOW}: independent additions or insertions; unlikely to break consistency,
  *       may be auto-resolvable.</li>
- *   <li>{@link #MEDIUM} – same attribute or reference on the same element changed to different
+ *   <li>{@link #MEDIUM}: same attribute or reference on the same element changed to different
  *       values on both branches; developer must pick the winner.</li>
- *   <li>{@link #HIGH} – one branch deleted an element the other still modifies, or both
+ *   <li>{@link #HIGH}: one branch deleted an element the other still modifies, or both
  *       branches changed a reference in incompatible directions; requires explicit decision.</li>
  * </ul>
  */

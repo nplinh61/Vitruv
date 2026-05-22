@@ -12,8 +12,10 @@ import org.apache.logging.log4j.Logger;
 import org.eclipse.emf.common.util.URI;
 import org.eclipse.emf.ecore.EObject;
 import tools.vitruv.change.atomic.EChange;
+import tools.vitruv.change.atomic.eobject.DeleteEObject;
 import tools.vitruv.change.atomic.eobject.EObjectExistenceEChange;
 import tools.vitruv.change.atomic.feature.FeatureEChange;
+import tools.vitruv.change.atomic.root.RemoveRootEObject;
 import tools.vitruv.change.atomic.root.RootEChange;
 import tools.vitruv.change.atomic.uuid.Uuid;
 import tools.vitruv.change.composite.description.PropagatedChange;
@@ -57,8 +59,36 @@ public class SemanticChangeBuffer implements ChangePropagationListener {
       this.origin = origin;
     }
 
-    public EChange<EObject> getChange() { return change; }
-    public ChangeOrigin getOrigin() { return origin; }
+    public EChange<EObject> getChange() {
+      return change;
+    }
+
+    public ChangeOrigin getOrigin() {
+      return origin;
+    }
+  }
+
+  /**
+   * Atomic result of a {@link #drainChanges()} call. Bundles the accumulated changes together
+   * with the pre-captured deletion UUID overrides so callers receive both atomically.
+   */
+  public static class DrainResult {
+    private final Map<String, List<EChange<EObject>>> changesByResource;
+    private final Map<EChange<EObject>, String> deletionUuidOverrides;
+
+    DrainResult(Map<String, List<EChange<EObject>>> changesByResource,
+        Map<EChange<EObject>, String> deletionUuidOverrides) {
+      this.changesByResource = changesByResource;
+      this.deletionUuidOverrides = deletionUuidOverrides;
+    }
+
+    /** Convenience factory: wraps an existing map with an empty override map. */
+    public static DrainResult of(Map<String, List<EChange<EObject>>> changesByResource) {
+      return new DrainResult(changesByResource, Map.of());
+    }
+
+    public Map<String, List<EChange<EObject>>> changesByResource() { return changesByResource; }
+    public Map<EChange<EObject>, String> deletionUuidOverrides() { return deletionUuidOverrides; }
   }
 
   /**
@@ -72,9 +102,22 @@ public class SemanticChangeBuffer implements ChangePropagationListener {
    */
   private int totalChanges = 0;
 
+  /**
+   * Holds the UUID-form change between {@link #startedChangePropagation} and
+   * {@link #finishedChangePropagation} so we can extract deletion UUIDs before apply.
+   */
+  private VitruviusChange<Uuid> pendingUuidChange = null;
+
+  /**
+   * Pre-captured UUID strings for deletion-type EChange instances, keyed by EChange instance
+   * identity. Populated during {@link #finishedChangePropagation} by correlating with
+   * {@link #pendingUuidChange}, and drained alongside {@link #changesByResource}.
+   */
+  private final Map<EChange<EObject>, String> deletionUuidOverrides = new IdentityHashMap<>();
+
   @Override
   public synchronized void startedChangePropagation(VitruviusChange<Uuid> changeToPropagate) {
-    // no-op
+    this.pendingUuidChange = changeToPropagate;
   }
 
   /**
@@ -89,6 +132,12 @@ public class SemanticChangeBuffer implements ChangePropagationListener {
   @Override
   public synchronized void finishedChangePropagation(
       Iterable<PropagatedChange> propagatedChanges) {
+
+    // Grab and clear the pre-captured UUID-form change so we can correlate by index.
+    List<EChange<Uuid>> uuidFormChanges = pendingUuidChange != null
+        ? pendingUuidChange.getEChanges() : List.of();
+    pendingUuidChange = null;
+
     List<PropagatedChange> pcList = new ArrayList<>();
     propagatedChanges.forEach(pcList::add);
 
@@ -102,7 +151,10 @@ public class SemanticChangeBuffer implements ChangePropagationListener {
       }
     }
 
-    // Only collect from PropagatedChanges whose EChanges are NOT reaction outputs.
+    // Correlate by index: the Vitruvius resolver maps each EChange<Uuid> to exactly one
+    // EChange<EObject> in the same position. Reaction PCs are skipped and do NOT advance
+    // the index, because they have no corresponding entry in the UUID-form input.
+    int uuidIdx = 0;
     for (PropagatedChange pc : pcList) {
       VitruviusChange<EObject> original = pc.getOriginalChange();
       List<EChange<EObject>> eChanges = original.getEChanges();
@@ -112,10 +164,38 @@ public class SemanticChangeBuffer implements ChangePropagationListener {
             eChanges.size());
         continue;
       }
+      for (EChange<EObject> eChange : eChanges) {
+        if (uuidIdx < uuidFormChanges.size()) {
+          String preUuid = extractDeletionUuid(uuidFormChanges.get(uuidIdx));
+          if (preUuid != null) {
+            deletionUuidOverrides.put(eChange, preUuid);
+          }
+        }
+        uuidIdx++;
+      }
       collectFromVitruviusChange(original);
     }
-    LOGGER.debug("Buffer now holds {} atomic change(s) across {} resource(s)",
-        totalChanges, changesByResource.size());
+    LOGGER.debug("Buffer now holds {} atomic change(s) across {} resource(s), "
+        + "{} deletion UUID override(s)", totalChanges, changesByResource.size(),
+        deletionUuidOverrides.size());
+  }
+
+  /**
+   * Extracts the UUID string from a deletion-type EChange&lt;Uuid&gt;, or returns null if the
+   * change is not a deletion. Covers DeleteEObject and RemoveRootEObject, which are the two
+   * change types where the affected element is unregistered from the UUID resolver after apply.
+   */
+  @SuppressWarnings("unchecked")
+  private String extractDeletionUuid(EChange<Uuid> change) {
+    if (change instanceof DeleteEObject<?> && change instanceof EObjectExistenceEChange<?> e) {
+      Object affected = e.getAffectedElement();
+      return affected instanceof Uuid uuid ? uuid.toString() : null;
+    }
+    if (change instanceof RemoveRootEObject<?> r) {
+      Object oldVal = r.getOldValue();
+      return oldVal instanceof Uuid uuid ? uuid.toString() : null;
+    }
+    return null;
   }
 
   /**
@@ -127,16 +207,22 @@ public class SemanticChangeBuffer implements ChangePropagationListener {
    *
    * @return immutable map of resource URI to ordered atomic changes.
    */
-  public synchronized Map<String, List<EChange<EObject>>> drainChanges() {
+  public synchronized DrainResult drainChanges() {
     Map<String, List<EChange<EObject>>> snapshot = new LinkedHashMap<>();
     changesByResource.forEach((uri, changes) ->
         snapshot.put(uri, Collections.unmodifiableList(new ArrayList<>(changes))));
     changesByResource.clear();
     int drained = totalChanges;
     totalChanges = 0;
-    LOGGER.info("Drained {} atomic change(s) from buffer for {} resource(s)",
-        drained, snapshot.size());
-    return Collections.unmodifiableMap(snapshot);
+
+    Map<EChange<EObject>, String> overrideSnapshot = new IdentityHashMap<>(deletionUuidOverrides);
+    deletionUuidOverrides.clear();
+
+    LOGGER.info("Drained {} atomic change(s) from buffer for {} resource(s), "
+        + "{} deletion UUID override(s)", drained, snapshot.size(), overrideSnapshot.size());
+    return new DrainResult(
+        Collections.unmodifiableMap(snapshot),
+        Collections.unmodifiableMap(overrideSnapshot));
   }
 
   /**
@@ -159,6 +245,7 @@ public class SemanticChangeBuffer implements ChangePropagationListener {
     changesByResource.clear();
     int drained = totalChanges;
     totalChanges = 0;
+    deletionUuidOverrides.clear();
     LOGGER.info("Drained {} annotated change(s) from buffer for {} resource(s)",
         drained, snapshot.size());
     return Collections.unmodifiableMap(snapshot);

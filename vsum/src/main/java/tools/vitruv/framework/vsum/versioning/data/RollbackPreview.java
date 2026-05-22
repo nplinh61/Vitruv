@@ -47,9 +47,9 @@ public class RollbackPreview {
   public RollbackPreview(VersionMetadata targetVersion, String currentHeadSha,
                          String branch, List<String> commitsToAbandon,
                          List<String> filesToChange, boolean hasUncommittedChanges) {
-    this.targetVersion = Objects.requireNonNull(targetVersion);
-    this.currentHeadSha = Objects.requireNonNull(currentHeadSha);
-    this.branch = Objects.requireNonNull(branch);
+    this.targetVersion = Objects.requireNonNull(targetVersion, "target version must not be null");
+    this.currentHeadSha = Objects.requireNonNull(currentHeadSha, "current HEAD SHA must not be null");
+    this.branch = Objects.requireNonNull(branch, "branch must not be null");
     this.commitsToAbandon = List.copyOf(commitsToAbandon);
     this.filesToChange = List.copyOf(filesToChange);
     this.hasUncommittedChanges = hasUncommittedChanges;

@@ -187,7 +187,6 @@ public class ValidationResultFile {
   private void writeTextResult(ValidationResult result, Path textResultPath) throws IOException {
     var sb = new StringBuilder();
 
-    // status line shown at the top of the hook output.
     sb.append("\n");
     if (result.isValid()) {
       sb.append("VALIDATION PASSED\n");
@@ -214,13 +213,11 @@ public class ValidationResultFile {
       sb.append("\n");
     }
 
-    // affirmative message for a completely clean result.
     if (result.isValid() && !result.hasWarnings()) {
       sb.append("No errors or warnings found.\n");
       sb.append("V-SUM is consistent and ready to commit.\n\n");
     }
 
-    // action hint so the developer knows what to do when the commit is blocked.
     if (!result.isValid()) {
       sb.append("\nFix errors above before committing.\n\n");
     }

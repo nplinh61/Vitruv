@@ -1,7 +1,5 @@
 package tools.vitruv.framework.vsum.branch.merge;
 
-import lombok.Setter;
-
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -45,13 +43,6 @@ public final class MergeTracer {
     private static final DateTimeFormatter FILE_TS =
             DateTimeFormatter.ofPattern("yyyy-MM-dd_HHmmss");
 
-    /**
-     * -- SETTER --
-     *  Enables or disables trace output globally (console + file).
-     *  Default is
-     * .
-     */
-    @Setter
     private static boolean enabled = !Boolean.getBoolean("merge.trace.disabled");
     private static Path outputDir = Path.of("merge-traces");
     private static BufferedWriter fileWriter;
@@ -60,6 +51,10 @@ public final class MergeTracer {
 
     private MergeTracer() { }
 
+    /** Enables or disables trace output globally (console + file). Default is enabled. */
+    public static void setEnabled(boolean value) {
+        enabled = value;
+    }
 
     /** Returns whether tracing is currently enabled. */
     public static boolean isEnabled() {
@@ -79,8 +74,6 @@ public final class MergeTracer {
     public static Path getCurrentLogFile() {
         return currentLogFile;
     }
-
-    // ── Session lifecycle ────────────────────────────────────────────
 
     /**
      * Starts a new trace session for a scenario.
@@ -126,8 +119,6 @@ public final class MergeTracer {
         currentLogFile = null;
         currentScenarioId = null;
     }
-
-    // ── Trace output ─────────────────────────────────────────────────
 
     /**
      * Writes a single trace line to both the console and the log file.
@@ -191,8 +182,6 @@ public final class MergeTracer {
         if (!enabled) return;
         trace("└──────────────────────────────────────────────────────────────────────┘");
     }
-
-    // ── Internal ─────────────────────────────────────────────────────
 
     private static void writeLine(String message) {
         if (fileWriter == null) return;

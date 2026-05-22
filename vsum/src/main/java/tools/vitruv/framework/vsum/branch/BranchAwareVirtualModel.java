@@ -133,7 +133,7 @@ public class BranchAwareVirtualModel implements InternalVirtualModel {
    *   <li>Calls {@link VsumFileSystemLayout#inheritFromBranchIfEmpty(String)} so a
    *       freshly created branch starts with the parent branch's UUID and
    *       correspondence state.</li>
-   *   <li>Calls {@link InternalVirtualModel#reload(VsumFileSystemLayout)} to reset the
+   *   <li>Calls {@link InternalVirtualModel#reinitialize(VsumFileSystemLayout)} to reset the
    *       in-memory resource set, UUID resolver, and correspondence model to reflect
    *       the target branch's files on disk.</li>
    * </ol>
@@ -176,11 +176,11 @@ public class BranchAwareVirtualModel implements InternalVirtualModel {
         changeBuffer.drainChanges();
       }
 
-      // Reload in place: VirtualModelImpl unloads all current branch resources,
+      // Reinitialize in place: VirtualModelImpl unloads all current branch resources,
       // resets the UUID resolver, recreates the correspondence model pointing to the
       // target branch's file, and reloads from disk.
       // The VirtualModelRegistry entry and CPR configuration are never touched.
-      activeModel.reload(newLayout);
+      activeModel.reinitialize(newLayout);
 
       // Update only after successful reload
       activeBranchName = newBranch;
@@ -232,7 +232,7 @@ public class BranchAwareVirtualModel implements InternalVirtualModel {
   }
 
   /**
-   * Same-branch reload - reloads the V-SUM from disk without switching branches.
+   * Reloads the V-SUM from disk without switching branches.
    * Called by {@link tools.vitruv.framework.vsum.branch.handler.VsumMergeWatcher}
    * after a merge to refresh in-memory state while staying on the current branch.
    */
@@ -242,23 +242,23 @@ public class BranchAwareVirtualModel implements InternalVirtualModel {
   }
 
   /**
-   * Reloads the V-SUM with a new layout. External callers should prefer
+   * Reinitializes the V-SUM with a new layout. External callers should prefer
    * {@link #switchBranch(String, String)} which additionally handles inheritance
    * and keeps {@code activeBranchName} consistent.
    * This override exists because {@link tools.vitruv.framework.vsum.VirtualModel}
    * declares it as part of the public interface.
    */
   @Override
-  public void reload(VsumFileSystemLayout newLayout) {
-    // Discard stale EChange references before reload() unloads resources and detaches EObjects.
+  public void reinitialize(VsumFileSystemLayout newLayout) {
+    // Discard stale EChange references before reinitialize() unloads resources and detaches EObjects.
     // The watcher path (PostCheckoutHandler → this method) bypasses switchBranch(), so the
     // drain must live here too.
     if (changeBuffer.hasChanges()) {
-      LOGGER.warn("Discarding {} stale change(s) before layout reload (pre-reload epoch)",
+      LOGGER.warn("Discarding {} stale change(s) before layout reinitialize (pre-reload epoch)",
           changeBuffer.size());
       changeBuffer.drainChanges();
     }
-    activeModel.reload(newLayout);
+    activeModel.reinitialize(newLayout);
     this.activeBranchName = newLayout.getCurrentBranch();
   }
 

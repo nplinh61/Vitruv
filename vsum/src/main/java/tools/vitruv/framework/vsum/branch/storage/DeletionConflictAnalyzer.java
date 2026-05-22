@@ -100,7 +100,7 @@ public class DeletionConflictAnalyzer {
             // Find updates on the other branch that affect this element or
             // are contained within it (containerUuid matches deletedUuid)
             List<SemanticChangeEntry> affected = updatingEntries.stream()
-                    .filter(e -> isNonDeletionChange(e))
+                    .filter(this::isNonDeletionChange)
                     .filter(e -> Objects.equals(deletedUuid, e.getElementUuid())
                             || Objects.equals(deletedUuid, e.getContainerUuid()))
                     .collect(Collectors.toList());

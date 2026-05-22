@@ -54,12 +54,12 @@ public abstract class AbstractTriggerFile<T extends AbstractTriggerFile.TriggerI
    * {@link Pattern#quote} prevents the pipe character from being treated as a
    * regex alternation operator.
    */
-  protected static final Pattern SPLIT_PATTERN = Pattern.compile(Pattern.quote(DELIMITER));
+  private static final Pattern SPLIT_PATTERN = Pattern.compile(Pattern.quote(DELIMITER));
 
   /**
    * Full path to the trigger file on disk. Set once at construction time.
    */
-  protected final Path triggerFilePath;
+  private final Path triggerFilePath;
 
   /**
    * Constructs the trigger file manager for the given repository root and filename.

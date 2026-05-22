@@ -37,7 +37,6 @@ import tools.vitruv.framework.vsum.versioning.data.RollbackPreview;
 import tools.vitruv.framework.vsum.versioning.data.RollbackResult;
 import tools.vitruv.framework.vsum.versioning.data.VersionMetadata;
 
-
 /**
  * Manages model versioning for Vitruvius using Git annotated tags.
  *
@@ -52,9 +51,10 @@ import tools.vitruv.framework.vsum.versioning.data.VersionMetadata;
 public class VersioningService {
 
   private static final Logger LOGGER = LogManager.getLogger(VersioningService.class);
-  private static final String VERSIONS_DIR  = ".vitruvius/versions";
+  private static final String VERSIONS_DIR = ".vitruvius/versions";
   private static final String VSUM_BASE_DIR = ".vitruvius/vsum";
-  private static final String BRANCHES_DIR  = ".vitruvius/branches";
+  private static final String BRANCHES_DIR = ".vitruvius/branches";
+  private static final String CHANGELOGS_DIR = ".vitruvius/changelogs";
   private static final String TAG_PREFIX = "refs/tags/";
 
   private final Path repoRoot;
@@ -95,11 +95,9 @@ public class VersioningService {
     try (Git git = Git.open(repoRoot.toFile())) {
       Repository repo = git.getRepository();
 
-      // Check tag does not already exist
       if (repo.findRef(TAG_PREFIX + versionId) != null) {
         throw new VersioningException("Version already exists: " + versionId);
       }
-      // Read current branch and HEAD commit
       String branch = repo.getBranch();
       ObjectId headId = repo.resolve("HEAD");
       if (headId == null) {
@@ -156,11 +154,10 @@ public class VersioningService {
       for (Path file : files.filter(p -> p.toString().endsWith(".metadata")).toList()) {
         try {
           versions.add(VersionMetadata.readFrom(file));
-        } catch (Exception e) {
+        } catch (IOException e) {
           LOGGER.warn("Failed to read version metadata from {}: {}", file, e.getMessage());
         }
       }
-      // Sort newest first by createdAt
       versions.sort(Comparator.comparing(VersionMetadata::getCreatedAt).reversed());
       LOGGER.debug("Listed {} version(s)", versions.size());
       return versions;
@@ -238,17 +235,14 @@ public class VersioningService {
     try (Git git = Git.open(repoRoot.toFile());
         RevWalk revWalk = new RevWalk(git.getRepository())) {
       Repository repo = git.getRepository();
-      // Resolve current HEAD
       ObjectId headId = repo.resolve("HEAD");
       if (headId == null) {
         throw new VersioningException("Repository has no commits");
       }
-      // Resolve target commit from tag
       ObjectId targetId = repo.resolve(versionId + "^{commit}");
       if (targetId == null) {
         throw new VersioningException("Cannot resolve commit for version '" + versionId + "'");
       }
-      // Collect commits between target and HEAD that will be abandoned
       List<String> commitsToAbandon = new ArrayList<>();
       RevCommit targetCommit = revWalk.parseCommit(targetId);
       revWalk.markStart(revWalk.parseCommit(headId));
@@ -256,16 +250,20 @@ public class VersioningService {
       for (RevCommit commit : revWalk) {
         commitsToAbandon.add(commit.getName().substring(0, 7) + " " + commit.getShortMessage());
       }
-      // Collect files that will change via git diff
       List<String> filesToChange = computeChangedFiles(git, repo, targetId, headId);
       String branch = repo.getBranch();
       String currentHeadSha = headId.getName();
-      // Check for uncommitted changes, only consider modified/deleted tracked files, not untracked:
+      // Check for uncommitted changes; only consider tracked files, not untracked ones.
+      // Exclude .vitruvius/changelogs/ because PostCommitHandler deliberately removes
+      // changelog files from disk after inserting them into the git object store — that
+      // causes getMissing()/getRemoved() to fire for those paths even though no user
+      // change is pending, and must not be treated as uncommitted work.
       var status = git.status().call();
-      boolean hasUncommittedChanges = !status.getModified().isEmpty()
-              || !status.getChanged().isEmpty()
-              || !status.getRemoved().isEmpty()
-              || !status.getMissing().isEmpty()
+      boolean hasUncommittedChanges =
+              status.getModified().stream().anyMatch(p -> !p.startsWith(CHANGELOGS_DIR + "/"))
+              || status.getChanged().stream().anyMatch(p -> !p.startsWith(CHANGELOGS_DIR + "/"))
+              || status.getRemoved().stream().anyMatch(p -> !p.startsWith(CHANGELOGS_DIR + "/"))
+              || status.getMissing().stream().anyMatch(p -> !p.startsWith(CHANGELOGS_DIR + "/"))
               || !status.getConflicting().isEmpty();
       LOGGER.info("Rollback preview for version '{}': {} commit(s) to abandon, "
                       + "{} file(s) to change, uncommittedChanges={}",
@@ -304,14 +302,12 @@ public class VersioningService {
             targetVersion.getCommitSha().substring(0, 7));
     try (Git git = Git.open(repoRoot.toFile())) {
       Repository repo = git.getRepository();
-      // Resolve target commit from tag
       ObjectId targetId = repo.resolve(targetVersion.getVersionId() + "^{commit}");
       if (targetId == null) {
         return RollbackResult.failed(targetVersion, "Cannot resolve commit for version '"
                 + targetVersion.getVersionId() + "'");
       }
 
-      // Execute git reset --hard <targetCommit>
       git.reset().setMode(org.eclipse.jgit.api.ResetCommand.ResetType.HARD)
               .setRef(targetId.getName()).call();
       ObjectId newHead = repo.resolve("HEAD");
@@ -350,7 +346,7 @@ public class VersioningService {
     if (!Files.exists(metadataFile)) {
       throw new VersioningException("Version not found: " + versionId);
     }
-    // Delete the metadata file first — recoverable if this fails (version remains intact).
+    // Delete metadata first; recoverable if this fails (version remains intact).
     try {
       Files.delete(metadataFile);
     } catch (IOException e) {
@@ -389,6 +385,10 @@ public class VersioningService {
 
     try (Git git = Git.open(repoRoot.toFile())) {
       Repository repo = git.getRepository();
+
+      if (repo.findRef("refs/heads/" + branchName) != null) {
+        throw new VersioningException("Branch already exists: " + branchName);
+      }
 
       ObjectId oid = repo.resolve(version.getCommitSha());
       if (oid == null) {
@@ -460,13 +460,6 @@ public class VersioningService {
       GitNameValidator.validateFormat(name);
     } catch (IllegalArgumentException e) {
       throw new VersioningException(e.getMessage(), e);
-    }
-    try (Git git = Git.open(repoRoot.toFile())) {
-      if (git.getRepository().findRef("refs/heads/" + name) != null) {
-        throw new VersioningException("Branch already exists: " + name);
-      }
-    } catch (IOException e) {
-      throw new VersioningException("Failed to validate branch name: " + e.getMessage(), e);
     }
   }
 

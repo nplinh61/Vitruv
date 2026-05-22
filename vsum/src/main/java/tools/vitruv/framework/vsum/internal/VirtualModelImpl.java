@@ -89,11 +89,11 @@ public class VirtualModelImpl implements InternalVirtualModel, ChangePropagation
     }
 
     @Override
-    public void reload(VsumFileSystemLayout newLayout) {
-        LOGGER.info("Reloading VirtualModel for branch '{}'", newLayout.getCurrentBranch());
+    public void reinitialize(VsumFileSystemLayout newLayout) {
+        LOGGER.info("Reinitializing VirtualModel for branch '{}'", newLayout.getCurrentBranch());
         this.fileSystemLayout = newLayout;
-        resourceRepository.reload(newLayout);
-        LOGGER.info("VirtualModel reloaded for branch '{}'", newLayout.getCurrentBranch());
+        resourceRepository.reinitialize(newLayout);
+        LOGGER.info("VirtualModel reinitialized for branch '{}'", newLayout.getCurrentBranch());
     }
 
     @Override

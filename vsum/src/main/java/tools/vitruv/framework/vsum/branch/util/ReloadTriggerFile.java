@@ -171,8 +171,8 @@ public class ReloadTriggerFile extends AbstractTriggerFile<ReloadTriggerFile.Tri
     public TriggerInfo(
         String branchName, String oldBranchName, String requestId, long timestamp) {
       super(requestId, timestamp);
-      this.branchName = Objects.requireNonNull(branchName);
-      this.oldBranchName = Objects.requireNonNull(oldBranchName);
+      this.branchName = Objects.requireNonNull(branchName, "branch name must not be null");
+      this.oldBranchName = Objects.requireNonNull(oldBranchName, "old branch name must not be null");
     }
 
     @Override
@@ -184,6 +184,8 @@ public class ReloadTriggerFile extends AbstractTriggerFile<ReloadTriggerFile.Tri
         return false;
       }
       TriggerInfo that = (TriggerInfo) o;
+      // oldBranchName is context metadata; two reload requests for the same
+      // branch/request/timestamp are the same event regardless of origin branch.
       return getTimestamp() == that.getTimestamp()
           && Objects.equals(branchName, that.branchName)
           && Objects.equals(getRequestId(), that.getRequestId());
@@ -191,6 +193,7 @@ public class ReloadTriggerFile extends AbstractTriggerFile<ReloadTriggerFile.Tri
 
     @Override
     public int hashCode() {
+      // oldBranchName excluded from equals, so excluded here too.
       return Objects.hash(branchName, getRequestId(), getTimestamp());
     }
 
