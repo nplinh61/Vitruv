@@ -23,11 +23,10 @@ public interface ModelRepository extends ChangeRecordingModelRepository {
    */
   void reload();
 
-  /** Reloads all models from the file system into the repository.
-   * A new vsum file system layout will be used to reflect
-   * the corresponding uuid and correspondence references
+  /** Binds this repository to a different branch's storage directory, discarding all
+   * in-memory state and reloading from the new layout's files on disk.
    */
-  void reload(VsumFileSystemLayout newLayout);
+  void reinitialize(VsumFileSystemLayout newLayout);
 
   /** Saves or deletes models in the repository based on their state. */
   void saveOrDeleteModels();
