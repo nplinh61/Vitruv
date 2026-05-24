@@ -440,11 +440,12 @@ public class BranchManager {
         for (var file : metadataFiles) {
           var metadata = BranchMetadata.readFrom(file);
 
-          // deleted branches and self-referential root branches are excluded from topology
           if (metadata.getState() == BranchState.DELETED) {
             continue;
           }
           if (metadata.getParent().equals(metadata.getName())) {
+            // Root branch: ensure it appears as a key even when it has no children yet.
+            topology.computeIfAbsent(metadata.getName(), k -> new ArrayList<>());
             continue;
           }
           topology.computeIfAbsent(metadata.getParent(), k -> new ArrayList<>())

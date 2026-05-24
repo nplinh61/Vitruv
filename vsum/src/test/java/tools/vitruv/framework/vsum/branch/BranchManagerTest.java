@@ -453,18 +453,23 @@ class BranchManagerTest {
         }
 
         /**
-         * Verifies that an empty map is returned when no managed branches exist.
-         * Branches created outside the manager have no metadata files and are therefore not part of the topology.
+         * Verifies that the initial branch appears as a key with an empty children list
+         * when no child branches have been created yet.
+         * The BranchManager bootstraps metadata for the Git-init branch on construction,
+         * so it is always visible in the topology even before any child branches exist.
          */
         @Test
-        @DisplayName("returns an empty map when no managed branches exist")
-        void emptyTopology(@TempDir Path repoDir) throws Exception {
+        @DisplayName("returns the root branch with an empty children list when no child branches exist")
+        void rootBranchAppearsWithNoChildren(@TempDir Path repoDir) throws Exception {
             try (var ignored = initRepo(repoDir)) {
                 var manager = new BranchManager(repoDir);
-                // the repository has only master, which was created by Git init and has no metadata.
                 var topology = manager.getBranchTopology();
-                assertTrue(topology.isEmpty(),
-                        "topology must be empty when no branches were created via the manager");
+                assertEquals(1, topology.size(),
+                        "topology must contain exactly the root branch");
+                assertTrue(topology.containsKey("master"),
+                        "master must be present as a key");
+                assertTrue(topology.get("master").isEmpty(),
+                        "master must have no children yet");
             }
         }
 
