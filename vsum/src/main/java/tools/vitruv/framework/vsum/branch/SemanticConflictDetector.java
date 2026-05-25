@@ -438,10 +438,10 @@ public class SemanticConflictDetector {
    *
    * <p>Two types of conflict are detected:
    * <ol>
-   *   <li><b>Direct conflicts</b> -- both branches modified the same
+   *   <li><b>Direct conflicts</b> - both branches modified the same
    *       {@code (elementUuid, feature)} pair to incompatible values, or one side deleted
    *       the element while the other modified it.</li>
-   *   <li><b>Tombstone conflicts</b> -- one branch deleted a container element (UUID X)
+   *   <li><b>Tombstone conflicts</b> - one branch deleted a container element (UUID X)
    *       and the other branch contains a change entry whose {@code containerUuid} equals X.
    *       The child change becomes an invalid orphan because its parent no longer exists;
    *       always classified as {@link ConflictSeverity#HIGH}.</li>
