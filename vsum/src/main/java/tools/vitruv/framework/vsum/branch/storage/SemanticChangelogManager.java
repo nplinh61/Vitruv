@@ -1,26 +1,6 @@
 package tools.vitruv.framework.vsum.branch.storage;
 
-import static com.google.common.base.Preconditions.checkNotNull;
-
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-import com.google.gson.JsonDeserializer;
-import com.google.gson.JsonPrimitive;
-import com.google.gson.JsonSerializer;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.Optional;
-import java.util.stream.Stream;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import com.google.gson.*;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.eclipse.emf.common.util.URI;
@@ -28,16 +8,28 @@ import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.resource.Resource;
 import org.eclipse.jgit.api.Git;
 import org.eclipse.jgit.diff.DiffEntry;
+import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.ObjectReader;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevWalk;
 import org.eclipse.jgit.treewalk.CanonicalTreeParser;
+import org.eclipse.jgit.treewalk.TreeWalk;
 import tools.vitruv.change.atomic.EChange;
 import tools.vitruv.change.atomic.eobject.CreateEObject;
 import tools.vitruv.change.atomic.eobject.DeleteEObject;
 import tools.vitruv.change.atomic.hid.internal.HierarchicalIdResolver;
 import tools.vitruv.change.atomic.uuid.UuidResolver;
 import tools.vitruv.framework.vsum.branch.data.FileOperation;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.*;
+import java.util.stream.Stream;
+
+import static com.google.common.base.Preconditions.checkNotNull;
 
 /**
  * Writes and reads semantic changelog files stored under
@@ -69,12 +61,6 @@ import tools.vitruv.framework.vsum.branch.data.FileOperation;
  *   "summary": { "totalFileChanges": 1, "totalSemanticChanges": 3, "affectedElementUuids": [...] }
  * }
  * </pre>
- *
- * <p><b>XMI format</b> - machine-readable, HierarchicalId-keyed, suitable for replay and
- * three-way merge.
- * One XMI file is written per changed resource using
- * {@link DeltaPersistence#saveResourceAsChanges} (state-based snapshot of the current
- * model state expressed as creation EChanges).
  */
 public class SemanticChangelogManager {
 
@@ -170,10 +156,16 @@ public class SemanticChangelogManager {
     // asking for "feature-x", even if both share the same short SHA).
     Path canonical = repositoryRoot.resolve(".vitruvius").resolve("changelogs")
         .resolve(branch).resolve("json").resolve(shortSha + ".json");
-    if (!Files.exists(canonical)) {
-      return null;
+    if (Files.exists(canonical)) {
+      String json = Files.readString(canonical);
+      return gson.fromJson(json, ChangelogDocument.class);
     }
-    String json = Files.readString(canonical);
+    // Fallback: read from git object store when the file is not in the current
+    // working tree (e.g., querying a non-active branch's changelog while on master).
+    String gitPath = ".vitruvius/changelogs/"
+        + branch.replace('\\', '/') + "/json/" + shortSha + ".json";
+    String json = readFromGitTree(branch, gitPath);
+    if (json == null) return null;
     return gson.fromJson(json, ChangelogDocument.class);
   }
 
@@ -195,6 +187,31 @@ public class SemanticChangelogManager {
       return null;
     }
     return Files.readString(file);
+  }
+
+  /**
+   * Reads a file at the given path from the committed tree of {@code branch} using the
+   * git object store. Returns {@code null} if the branch or the file cannot be found.
+   */
+  private String readFromGitTree(String branch, String filePath) {
+    try (Git git = Git.open(repositoryRoot.toFile())) {
+      org.eclipse.jgit.lib.Repository repo = git.getRepository();
+      ObjectId branchHead = repo.resolve(branch);
+      if (branchHead == null) return null;
+      try (RevWalk revWalk = new RevWalk(repo)) {
+        RevCommit commit = revWalk.parseCommit(branchHead);
+        try (TreeWalk treeWalk = TreeWalk.forPath(repo, filePath, commit.getTree())) {
+          if (treeWalk == null) return null;
+          try (ObjectReader reader = repo.newObjectReader()) {
+            byte[] bytes = reader.open(treeWalk.getObjectId(0)).getBytes();
+            return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+          }
+        }
+      }
+    } catch (IOException e) {
+      LOGGER.debug("Git object-store fallback failed for {}/{}: {}", branch, filePath, e.getMessage());
+      return null;
+    }
   }
 
   /**

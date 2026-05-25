@@ -21,11 +21,14 @@ import org.eclipse.jgit.diff.DiffEntry;
 import org.eclipse.jgit.diff.DiffFormatter;
 import org.eclipse.jgit.lib.ObjectId;
 import org.eclipse.jgit.lib.ObjectLoader;
+import org.eclipse.jgit.lib.ObjectReader;
 import org.eclipse.jgit.lib.PersonIdent;
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.revwalk.RevCommit;
 import org.eclipse.jgit.revwalk.RevTree;
 import org.eclipse.jgit.revwalk.RevWalk;
+import org.eclipse.jgit.treewalk.CanonicalTreeParser;
+import org.eclipse.jgit.treewalk.FileTreeIterator;
 import org.eclipse.jgit.treewalk.TreeWalk;
 import org.eclipse.jgit.util.io.DisabledOutputStream;
 import tools.vitruv.framework.vsum.branch.BranchManager;
@@ -54,7 +57,6 @@ public class VersioningService {
   private static final String VERSIONS_DIR = ".vitruvius/versions";
   private static final String VSUM_BASE_DIR = ".vitruvius/vsum";
   private static final String BRANCHES_DIR = ".vitruvius/branches";
-  private static final String CHANGELOGS_DIR = ".vitruvius/changelogs";
   private static final String TAG_PREFIX = "refs/tags/";
 
   private final Path repoRoot;
@@ -122,6 +124,7 @@ public class VersioningService {
       git.add().addFilepattern(relPath).call();
       git.commit()
           .setMessage("[vitruvius] Version metadata: " + versionId + "\n\nVitruvius-System: true\n")
+          .setNoVerify(true)
           .call();
       // Create annotated tag on the new HEAD (which now includes the metadata file).
       git.tag().setName(versionId).setMessage(tagMessage).setAnnotated(true).call();
@@ -253,25 +256,34 @@ public class VersioningService {
       List<String> filesToChange = computeChangedFiles(git, repo, targetId, headId);
       String branch = repo.getBranch();
       String currentHeadSha = headId.getName();
-      // Check for uncommitted changes; only consider tracked files, not untracked ones.
-      // Exclude .vitruvius/changelogs/ because PostCommitHandler deliberately removes
-      // changelog files from disk after inserting them into the git object store — that
-      // causes getMissing()/getRemoved() to fire for those paths even though no user
-      // change is pending, and must not be treated as uncommitted work.
-      var status = git.status().call();
-      boolean hasUncommittedChanges =
-              status.getModified().stream().anyMatch(p -> !p.startsWith(CHANGELOGS_DIR + "/"))
-              || status.getChanged().stream().anyMatch(p -> !p.startsWith(CHANGELOGS_DIR + "/"))
-              || status.getRemoved().stream().anyMatch(p -> !p.startsWith(CHANGELOGS_DIR + "/"))
-              || status.getMissing().stream().anyMatch(p -> !p.startsWith(CHANGELOGS_DIR + "/"))
-              || !status.getConflicting().isEmpty();
+      // Compare HEAD tree against the working directory to find genuine uncommitted
+      // changes. The V-SUM re-saves model files after every commit as an EMF side
+      // effect; because the bytes are identical to what was committed, they do not
+      // appear in a content-level diff. .vitruvius/ paths are filtered for safety.
+      boolean hasUncommittedChanges = false;
+      try (DiffFormatter fmt = new DiffFormatter(DisabledOutputStream.INSTANCE);
+           ObjectReader reader = repo.newObjectReader()) {
+        fmt.setRepository(repo);
+        CanonicalTreeParser headTree = new CanonicalTreeParser();
+        headTree.reset(reader, revWalk.parseCommit(headId).getTree());
+        FileTreeIterator workTree = new FileTreeIterator(repo);
+        List<DiffEntry> diffs = fmt.scan(headTree, workTree);
+        // Only ADD-type diffs represent untracked files; those survive git reset --hard
+        // and do not represent data that would be permanently lost in a rollback.
+        // Only MODIFY/DELETE entries are genuine "would be lost" changes.
+        hasUncommittedChanges = diffs.stream()
+            .filter(d -> d.getChangeType() != DiffEntry.ChangeType.ADD)
+            .map(d -> d.getChangeType() == DiffEntry.ChangeType.DELETE
+                ? d.getOldPath() : d.getNewPath())
+            .anyMatch(p -> !isVsumInternalPath(p));
+      }
       LOGGER.info("Rollback preview for version '{}': {} commit(s) to abandon, "
                       + "{} file(s) to change, uncommittedChanges={}",
               versionId, commitsToAbandon.size(), filesToChange.size(), hasUncommittedChanges);
       return new RollbackPreview(targetVersion, currentHeadSha, branch, commitsToAbandon, 
               filesToChange, hasUncommittedChanges);
-    } catch (GitAPIException | IOException e) {
-      throw new VersioningException("Failed to preview rollback to '" + versionId + "': " 
+    } catch (IOException e) {
+      throw new VersioningException("Failed to preview rollback to '" + versionId + "': "
               + e.getMessage(), e);
     }
   }
@@ -505,5 +517,12 @@ public class VersioningService {
    */
   private Path versionMetadataPath(String versionId) {
     return repoRoot.resolve(VERSIONS_DIR).resolve(versionId + ".metadata");
+  }
+
+  private static boolean isVsumInternalPath(String path) {
+    // .vitruvius/ holds all VSUM metadata, changelogs, and state files.
+    // test_project.marker_vitruv is placed by ProjectMarker.markAsProjectRootFolder()
+    // at VSUM init time and is also listed in .gitignore.template for this reason.
+    return path.startsWith(".vitruvius/") || path.equals("test_project.marker_vitruv");
   }
 }

@@ -1,7 +1,23 @@
 package tools.vitruv.framework.vsum.branch;
 
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
+import lombok.Setter;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.api.ResetCommand;
+import org.eclipse.jgit.api.errors.GitAPIException;
+import org.eclipse.jgit.dircache.DirCache;
+import org.eclipse.jgit.dircache.DirCacheBuilder;
+import org.eclipse.jgit.dircache.DirCacheEntry;
+import org.eclipse.jgit.lib.*;
+import org.eclipse.jgit.revwalk.RevCommit;
+import org.eclipse.jgit.revwalk.RevWalk;
+import tools.vitruv.framework.vsum.branch.data.BranchMetadata;
+import tools.vitruv.framework.vsum.branch.data.BranchState;
+import tools.vitruv.framework.vsum.branch.data.MaturityLevel;
+import tools.vitruv.framework.vsum.branch.exception.BranchOperationException;
+import tools.vitruv.framework.vsum.branch.handler.PostCheckoutHandler;
+import tools.vitruv.framework.vsum.branch.util.GitNameValidator;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -12,31 +28,9 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
-import lombok.Setter;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
-import org.eclipse.jgit.api.Git;
-import org.eclipse.jgit.api.errors.GitAPIException;
-import org.eclipse.jgit.dircache.DirCache;
-import org.eclipse.jgit.dircache.DirCacheBuilder;
-import org.eclipse.jgit.dircache.DirCacheEntry;
-import org.eclipse.jgit.lib.CommitBuilder;
-import org.eclipse.jgit.lib.Constants;
-import org.eclipse.jgit.lib.FileMode;
-import org.eclipse.jgit.lib.ObjectId;
-import org.eclipse.jgit.lib.ObjectInserter;
-import org.eclipse.jgit.lib.ObjectReader;
-import org.eclipse.jgit.lib.PersonIdent;
-import org.eclipse.jgit.lib.RefUpdate;
-import org.eclipse.jgit.lib.Repository;
-import org.eclipse.jgit.revwalk.RevCommit;
-import org.eclipse.jgit.revwalk.RevWalk;
-import tools.vitruv.framework.vsum.branch.data.BranchMetadata;
-import tools.vitruv.framework.vsum.branch.data.BranchState;
-import tools.vitruv.framework.vsum.branch.data.MaturityLevel;
-import tools.vitruv.framework.vsum.branch.exception.BranchOperationException;
-import tools.vitruv.framework.vsum.branch.handler.PostCheckoutHandler;
-import tools.vitruv.framework.vsum.branch.util.GitNameValidator;
+
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkNotNull;
 
 /**
  * Manages Git-based branches for the Vitruvius. All branch operations such as creation,
@@ -188,10 +182,9 @@ public class BranchManager {
 
   /**
    * Switches the working directory to the specified branch and triggers the post-checkout
-   * handler if one has been configured. The branch can be identified either by its exact
-   * name or by a prefix of its unique identifier (uid).
+   * handler if one has been configured. The branch can be identified by its exact name.
    *
-   * @param nameOrUid the branch name or a uid prefix to switch to.
+   * @param nameOrUid the branch name to switch to.
    *
    * @throws BranchOperationException if the branch cannot be found or the checkout fails.
    */
@@ -209,6 +202,13 @@ public class BranchManager {
       if (head != null && head.isSymbolic()) {
         oldBranch = Repository.shortenRefName(head.getTarget().getName());
       }
+
+      // Hard-reset to HEAD before checking out. Discards VSUM-internal writes that
+      // accumulate in the working tree after each commit (e.g., correspondence model
+      // re-saves triggered by EMF notifications). These post-commit writes are never
+      // user data; the VSUM reloads from HEAD after switching, so discarding them
+      // is safe and prevents CheckoutConflictException.
+      git.reset().setMode(ResetCommand.ResetType.HARD).call();
 
       // perform the checkout
       git.checkout().setName(resolvedName).call();

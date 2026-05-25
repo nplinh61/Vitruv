@@ -1,7 +1,23 @@
 package tools.vitruv.framework.vsum.branch;
 
-import static com.google.common.base.Preconditions.checkArgument;
-import static com.google.common.base.Preconditions.checkNotNull;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.eclipse.jgit.api.Git;
+import org.eclipse.jgit.api.MergeResult;
+import org.eclipse.jgit.api.ResetCommand;
+import org.eclipse.jgit.api.errors.GitAPIException;
+import org.eclipse.jgit.lib.*;
+import org.eclipse.jgit.merge.MergeStrategy;
+import org.eclipse.jgit.revwalk.RevCommit;
+import org.eclipse.jgit.revwalk.RevWalk;
+import org.eclipse.jgit.revwalk.filter.RevFilter;
+import org.eclipse.jgit.treewalk.TreeWalk;
+import tools.vitruv.framework.vsum.branch.data.*;
+import tools.vitruv.framework.vsum.branch.exception.BranchOperationException;
+import tools.vitruv.framework.vsum.branch.handler.PostMergeHandler;
+import tools.vitruv.framework.vsum.branch.merge.*;
+import tools.vitruv.framework.vsum.branch.util.MergeResultFile;
+import tools.vitruv.framework.vsum.branch.util.MergeTriggerFile;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -9,38 +25,9 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import org.eclipse.jgit.lib.ObjectLoader;
-import org.eclipse.jgit.treewalk.TreeWalk;
-import org.apache.logging.log4j.LogManager;
-import org.apache.logging.log4j.Logger;
-import org.eclipse.jgit.api.Git;
-import org.eclipse.jgit.api.MergeResult;
-import org.eclipse.jgit.api.ResetCommand;
-import org.eclipse.jgit.api.errors.GitAPIException;
-import org.eclipse.jgit.lib.ObjectId;
-import org.eclipse.jgit.lib.PersonIdent;
-import org.eclipse.jgit.lib.Ref;
-import org.eclipse.jgit.lib.Repository;
-import org.eclipse.jgit.merge.MergeStrategy;
-import org.eclipse.jgit.revwalk.RevCommit;
-import org.eclipse.jgit.revwalk.RevWalk;
-import org.eclipse.jgit.revwalk.filter.RevFilter;
-import tools.vitruv.framework.vsum.branch.data.BranchMetadata;
-import tools.vitruv.framework.vsum.branch.data.BranchState;
-import tools.vitruv.framework.vsum.branch.data.ModelMergeResult;
-import tools.vitruv.framework.vsum.branch.data.ReplayResult;
-import tools.vitruv.framework.vsum.branch.data.ValidationResult;
-import tools.vitruv.framework.vsum.branch.exception.BranchOperationException;
-import tools.vitruv.framework.vsum.branch.handler.PostMergeHandler;
-import tools.vitruv.framework.vsum.branch.data.SemanticConflict;
-import tools.vitruv.framework.vsum.branch.merge.ConflictResolution;
-import tools.vitruv.framework.vsum.branch.merge.ConflictResolutionProvider;
-import tools.vitruv.framework.vsum.branch.merge.GitStateLoader;
-import tools.vitruv.framework.vsum.branch.merge.MergeConflict;
-import tools.vitruv.framework.vsum.branch.merge.SemanticMergeEngine;
-import tools.vitruv.framework.vsum.branch.merge.SemanticMergeResult;
-import tools.vitruv.framework.vsum.branch.util.MergeResultFile;
-import tools.vitruv.framework.vsum.branch.util.MergeTriggerFile;
+
+import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkNotNull;
 
 /**
  * Manages Git merge operations for Vitruvius model branches.
@@ -325,14 +312,25 @@ public class MergeManager {
               + "' [auto-resolved:" + jgitStrategy.getName() + "]"
           : "Merge branch '" + sourceBranch + "' into '" + targetBranch + "'";
 
+      // setCommit(false): merge files only; we commit manually below to bypass the
+      // pre-commit hook, which must not run on internal merge commits.
       MergeResult jgitResult = git.merge()
           .include(sourceRef)
           .setStrategy(jgitStrategy)
-          .setCommit(true)
+          .setCommit(false)
           .setMessage(mergeMessage)
           .call();
 
-      ModelMergeResult result = buildResult(jgitResult, sourceBranch, targetBranch, repo);
+      ModelMergeResult result;
+      if (jgitResult.getMergeStatus() == MergeResult.MergeStatus.MERGED_NOT_COMMITTED) {
+        RevCommit mergeCommit = git.commit()
+            .setNoVerify(true)
+            .setMessage(mergeMessage)
+            .call();
+        result = ModelMergeResult.success(sourceBranch, targetBranch, mergeCommit.getName());
+      } else {
+        result = buildResult(jgitResult, sourceBranch, targetBranch, repo);
+      }
 
       if (!result.isSuccessful()
           || result.getStatus() == ModelMergeResult.MergeStatus.CONFLICTING) {
@@ -455,8 +453,6 @@ public class MergeManager {
         {
         ObjectId newHead = jgitResult.getNewHead();
         String sha = newHead != null ? newHead.getName() : "";
-        LOGGER.info("Fast-forward merge completed, new HEAD: {}",
-            sha.substring(0, Math.min(7, sha.length())));
         return ModelMergeResult.fastForward(sourceBranch, targetBranch, sha);
         }
 

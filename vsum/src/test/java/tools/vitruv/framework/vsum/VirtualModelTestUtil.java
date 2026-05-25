@@ -5,9 +5,11 @@ import static tools.vitruv.change.testutils.metamodels.AllElementTypesCreators.a
 
 import allElementTypes.AllElementTypesPackage;
 import allElementTypes.Root;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import org.eclipse.emf.common.util.URI;
+import org.eclipse.jgit.api.Git;
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.resource.ResourceSet;
 import tools.vitruv.change.atomic.EChange;
@@ -52,6 +54,7 @@ public final class VirtualModelTestUtil {
 
   /** Creates an empty virtual model without a change propagation specification. */
   public static VirtualModel createAndLoadTestVirtualModel(Path folder) throws Exception {
+    initGitRepo(folder);
     return new VirtualModelBuilder()
         .withStorageFolder(folder)
         .withUserInteractor(
@@ -63,6 +66,7 @@ public final class VirtualModelTestUtil {
   /** Creates an empty virtual model with a {@link RedundancyChangePropagationSpecification}. */
   public static VirtualModel createAndLoadTestVirtualModelWithConsistencyPreservation(Path folder)
       throws Exception {
+    initGitRepo(folder);
     return new VirtualModelBuilder()
         .withStorageFolder(folder)
         .withChangePropagationSpecification(
@@ -73,6 +77,26 @@ public final class VirtualModelTestUtil {
             UserInteractionFactory.instance.createUserInteractor(
                 UserInteractionFactory.instance.createPredefinedInteractionResultProvider(null)))
         .buildAndInitialize();
+  }
+
+  private static void initGitRepo(Path folder) throws Exception {
+    try (Git git = Git.init().setDirectory(folder.toFile()).setInitialBranch("master").call()) {
+      git.getRepository().getConfig().setString("user", null, "name", "Test User");
+      git.getRepository().getConfig().setString("user", null, "email", "test@example.com");
+      git.getRepository().getConfig().save();
+      var placeholder = folder.resolve(".gitkeep");
+      Files.writeString(placeholder, "");
+      git.add().addFilepattern(".gitkeep").call();
+      git.commit().setMessage("Initial commit").call();
+    }
+    // On Windows, git object files are read-only after creation. Make them writable so
+    // TestProjectManager can delete the temp directory during test cleanup.
+    Path gitObjects = folder.resolve(".git").resolve("objects");
+    if (Files.exists(gitObjects)) {
+      try (var stream = Files.walk(gitObjects)) {
+        stream.filter(Files::isRegularFile).forEach(p -> p.toFile().setWritable(true));
+      }
+    }
   }
 
   /**

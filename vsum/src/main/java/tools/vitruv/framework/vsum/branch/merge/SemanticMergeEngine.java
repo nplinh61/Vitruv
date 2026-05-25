@@ -1,48 +1,34 @@
 package tools.vitruv.framework.vsum.branch.merge;
 
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
-import java.util.stream.Collectors;
-
+import com.google.gson.Gson;
+import com.google.gson.GsonBuilder;
+import lombok.Setter;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import static edu.kit.ipd.sdq.commons.util.org.eclipse.emf.ecore.resource.ResourceSetUtil.withGlobalFactories;
-
 import org.eclipse.emf.ecore.EObject;
 import org.eclipse.emf.ecore.resource.Resource;
 import org.eclipse.emf.ecore.resource.ResourceSet;
-import org.eclipse.emf.ecore.resource.impl.ResourceSetImpl;
 import org.eclipse.emf.ecore.util.EcoreUtil;
 import org.eclipse.jgit.api.errors.GitAPIException;
-
-import tools.vitruv.change.atomic.uuid.UuidResolver;
-
 import tools.vitruv.change.atomic.EChange;
 import tools.vitruv.change.atomic.hid.HierarchicalId;
 import tools.vitruv.change.atomic.uuid.Uuid;
+import tools.vitruv.change.atomic.uuid.UuidResolver;
 import tools.vitruv.change.composite.description.PropagatedChange;
 import tools.vitruv.change.composite.description.VitruviusChange;
-import tools.vitruv.change.composite.description.VitruviusChangeFactory;
-import tools.vitruv.change.composite.description.VitruviusChangeResolver;
-import tools.vitruv.change.composite.description.VitruviusChangeResolverFactory;
 import tools.vitruv.change.composite.propagation.ChangePropagationListener;
 import tools.vitruv.change.interaction.InteractionResultProvider;
 import tools.vitruv.change.propagation.ChangePropagationSpecification;
-import tools.vitruv.framework.vsum.internal.InternalVirtualModel;
-import tools.vitruv.framework.vsum.branch.storage.SemanticChangelogManager;
+import tools.vitruv.framework.vsum.branch.SemanticConflictDetector;
 import tools.vitruv.framework.vsum.branch.storage.SemanticChangeEntry;
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
+import tools.vitruv.framework.vsum.branch.storage.SemanticChangelogManager;
+import tools.vitruv.framework.vsum.internal.InternalVirtualModel;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.*;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
@@ -76,7 +62,16 @@ public class SemanticMergeEngine {
      * When {@code true}, the UUID-based conflict detection pass inside {@link #merge} is skipped.
      * Set by {@link SemanticConflictDetector} before delegating steps 5-9, since steps 1-4
      * already performed direct conflict detection on the same data.
+     * -- SETTER --
+     *  Instructs this engine to skip the UUID-based direct conflict detection pass in
+     * . Call this before delegating from
+     *  so the engine does not redo work that steps 1-4 already performed. Reset to
+     *  in a
+     *  block after the merge call returns.
+     *
+
      */
+    @Setter
     private boolean skipDirectConflictDetection = false;
 
     public SemanticMergeEngine(Path repoRoot,
@@ -103,18 +98,6 @@ public class SemanticMergeEngine {
         this.interactionProvider = interactionProvider;
         this.conflictResolutionProvider = conflictResolutionProvider;
         this.intraBranchMode = intraBranchMode;
-    }
-
-    /**
-     * Instructs this engine to skip the UUID-based direct conflict detection pass in
-     * {@link #merge}. Call this before delegating from {@link tools.vitruv.framework.vsum.branch.SemanticConflictDetector}
-     * so the engine does not redo work that steps 1-4 already performed. Reset to
-     * {@code false} in a {@code finally} block after the merge call returns.
-     *
-     * @param skip {@code true} to skip, {@code false} to run (default)
-     */
-    public void setSkipDirectConflictDetection(boolean skip) {
-        this.skipDirectConflictDetection = skip;
     }
 
     /**
@@ -848,8 +831,7 @@ public class SemanticMergeEngine {
         // Consequential-write: earlier's reaction writes what later originally changes
         if (!Collections.disjoint(earlierReaction, laterDirect)) return true;
         // Write-consequential: later's reaction writes what earlier originally changes
-        if (!Collections.disjoint(laterReaction, earlierDirect)) return true;
-        return false;
+        return !Collections.disjoint(laterReaction, earlierDirect);
     }
 
     /**
@@ -865,7 +847,6 @@ public class SemanticMergeEngine {
      * @param ordering          list of booleans: true=take from A, false=take from B
      * @param allADtos          all A DTOs flat (for footprint collection)
      * @param allBDtos          all B DTOs flat (for footprint collection)
-     * @param baseUuidToElement base state element map (for warning detection)
      * @return merge result for this ordering
      */
     private SemanticMergeResult tryInterleaving(
@@ -1026,7 +1007,7 @@ public class SemanticMergeEngine {
         List<MergeConflict> conflicts = List.of();
         List<ConflictResolution> resolutions = List.of();
 
-        if (!skipDirectConflictDetection && (!oursDtos.isEmpty() || !theirsDtos.isEmpty())) {
+        if (!skipDirectConflictDetection) {
             UuidConflictDetector detector = new UuidConflictDetector();
             conflicts = detector.detectConflicts(oursDtos, theirsDtos);
 
@@ -1560,7 +1541,7 @@ public class SemanticMergeEngine {
                 .filter(c -> c.getType() == MergeConflict.ConflictType.MODIFY_MODIFY)
                 .collect(Collectors.toMap(
                         c -> c.getElementUuid() + "#" + c.getConflictingFeature(),
-                        c -> c.getConflictingFeature(),
+                        MergeConflict::getConflictingFeature,
                         (a, b) -> a));
 
         // For DELETE_MODIFY / MODIFY_DELETE: filter by UUID only (skip all DTOs for that element)
@@ -1590,9 +1571,6 @@ public class SemanticMergeEngine {
     }
 
     /**
-     * Loads ALL changelog DTOs from a directory, flat.
-     */
-    /**
      * Returns the set of relative paths (using forward slashes) for every JSON changelog
      * file under {@code dir/.vitruvius/changelogs/}. Used to identify which changelog
      * files belong to the merge base so they can be excluded when loading branch-specific DTOs.
@@ -1620,36 +1598,80 @@ public class SemanticMergeEngine {
      * Loads changelog DTOs grouped by transaction, skipping any JSON file whose
      * repository-relative path appears in {@code excludedRelPaths}. This removes
      * base-inherited changelogs so only net changes per branch are loaded.
+     *
+     * <p>Changelogs are sorted by git ancestry (parents before children) rather than
+     * alphabetically by filename. SHA hashes are not chronological, so alphabetical
+     * order can place a rename commit before the create commit it depends on.
      */
     private List<List<SemanticChangeLog.ChangeDto>> loadTransactionsExcluding(
             Path dir, Set<String> excludedRelPaths) throws IOException {
         Path changelogsRoot = dir.resolve(".vitruvius/changelogs");
         if (!Files.isDirectory(changelogsRoot)) return List.of();
         Gson gson = new GsonBuilder().create();
-        List<List<SemanticChangeLog.ChangeDto>> transactions = new ArrayList<>();
-        try (Stream<Path> jsonFiles = Files.walk(changelogsRoot)
+
+        Map<String, SemanticChangelogManager.ChangelogDocument> bySha = new LinkedHashMap<>();
+        List<SemanticChangelogManager.ChangelogDocument> noShaList = new ArrayList<>();
+
+        try (Stream<Path> stream = Files.walk(changelogsRoot)
                 .filter(p -> p.toString().endsWith(".json"))
                 .filter(p -> p.getParent() != null
-                        && "json".equals(p.getParent().getFileName().toString()))
-                .sorted()) {
-            for (Path jsonFile : jsonFiles.toList()) {
+                        && "json".equals(p.getParent().getFileName().toString()))) {
+            for (Path jsonFile : stream.toList()) {
                 String relPath = dir.relativize(jsonFile).toString().replace('\\', '/');
                 if (excludedRelPaths.contains(relPath)) continue;
                 String json = Files.readString(jsonFile);
                 SemanticChangelogManager.ChangelogDocument doc =
                         gson.fromJson(json, SemanticChangelogManager.ChangelogDocument.class);
                 if (doc == null || doc.fileChanges == null) continue;
-                List<SemanticChangeLog.ChangeDto> dtos = new ArrayList<>();
-                for (SemanticChangelogManager.ChangelogDocument.FileChangeInfo fc : doc.fileChanges) {
-                    if (fc.semanticChanges == null) continue;
-                    for (SemanticChangeEntry entry : fc.semanticChanges) {
-                        dtos.add(SemanticChangeEntryToChangeDtoConverter.convert(entry));
-                    }
+                String fullSha = (doc.commit != null) ? doc.commit.sha : null;
+                if (fullSha != null) {
+                    bySha.put(fullSha, doc);
+                } else {
+                    noShaList.add(doc);
                 }
-                if (!dtos.isEmpty()) transactions.add(dtos);
             }
         }
+
+        List<SemanticChangelogManager.ChangelogDocument> sorted = sortByAncestry(bySha);
+        sorted.addAll(noShaList);
+
+        List<List<SemanticChangeLog.ChangeDto>> transactions = new ArrayList<>();
+        for (SemanticChangelogManager.ChangelogDocument doc : sorted) {
+            List<SemanticChangeLog.ChangeDto> dtos = new ArrayList<>();
+            for (SemanticChangelogManager.ChangelogDocument.FileChangeInfo fc : doc.fileChanges) {
+                if (fc.semanticChanges == null) continue;
+                for (SemanticChangeEntry entry : fc.semanticChanges) {
+                    dtos.add(SemanticChangeEntryToChangeDtoConverter.convert(entry));
+                }
+            }
+            if (!dtos.isEmpty()) transactions.add(dtos);
+        }
         return transactions;
+    }
+
+    /**
+     * Sorts changelog documents by commit author timestamp (oldest first).
+     * This ensures earlier commits (e.g., CREATE) are replayed before later
+     * ones (e.g., RENAME). Using author date instead of {@code parentShas}
+     * avoids mismatch caused by auto-changelog commits interleaved between
+     * user commits in the git graph: parentShas in the changelog doc point
+     * to auto-changelog SHAs that are not keys in our map, making
+     * parentSha-based topological sort unreliable.
+     *
+     * <p>ISO-8601 date strings (e.g., "2026-05-24T22:37:00") sort correctly
+     * lexicographically, so a plain string comparison gives chronological order.
+     */
+    private static List<SemanticChangelogManager.ChangelogDocument> sortByAncestry(
+            Map<String, SemanticChangelogManager.ChangelogDocument> bySha) {
+        return bySha.values().stream()
+                .sorted(Comparator.comparing(doc -> {
+                    if (doc.commit != null && doc.commit.author != null
+                            && doc.commit.author.date != null) {
+                        return doc.commit.author.date;
+                    }
+                    return "";
+                }))
+                .collect(Collectors.toList());
     }
 
     private List<SemanticChangeLog.ChangeDto> loadAllDtosFromDir(Path dir) throws IOException {
@@ -1663,38 +1685,49 @@ public class SemanticMergeEngine {
      * <p>Each file represents one user commit = one transaction. The method walks all
      * {@code json/} subdirectories under {@code .vitruvius/changelogs/} so it works
      * regardless of the branch name.
+     *
+     * <p>Documents are sorted by git ancestry (parents before children) so that replay
+     * always processes earlier commits (e.g., creates) before later ones (e.g., renames).
      */
     private List<List<SemanticChangeLog.ChangeDto>> loadTransactionsFromDir(Path dir) throws IOException {
         Path changelogsRoot = dir.resolve(".vitruvius/changelogs");
-        if (!Files.isDirectory(changelogsRoot)) {
-            return List.of();
-        }
+        if (!Files.isDirectory(changelogsRoot)) return List.of();
         Gson gson = new GsonBuilder().create();
-        List<List<SemanticChangeLog.ChangeDto>> transactions = new ArrayList<>();
 
-        try (Stream<Path> jsonFiles = Files.walk(changelogsRoot)
+        Map<String, SemanticChangelogManager.ChangelogDocument> bySha = new LinkedHashMap<>();
+        List<SemanticChangelogManager.ChangelogDocument> noShaList = new ArrayList<>();
+
+        try (Stream<Path> stream = Files.walk(changelogsRoot)
                 .filter(p -> p.toString().endsWith(".json"))
                 .filter(p -> p.getParent() != null
-                        && "json".equals(p.getParent().getFileName().toString()))
-                .sorted()) {
-
-            for (Path jsonFile : jsonFiles.toList()) {
+                        && "json".equals(p.getParent().getFileName().toString()))) {
+            for (Path jsonFile : stream.toList()) {
                 String json = Files.readString(jsonFile);
                 SemanticChangelogManager.ChangelogDocument doc =
                         gson.fromJson(json, SemanticChangelogManager.ChangelogDocument.class);
                 if (doc == null || doc.fileChanges == null) continue;
-
-                List<SemanticChangeLog.ChangeDto> dtos = new ArrayList<>();
-                for (SemanticChangelogManager.ChangelogDocument.FileChangeInfo fc : doc.fileChanges) {
-                    if (fc.semanticChanges == null) continue;
-                    for (SemanticChangeEntry entry : fc.semanticChanges) {
-                        dtos.add(SemanticChangeEntryToChangeDtoConverter.convert(entry));
-                    }
-                }
-                if (!dtos.isEmpty()) {
-                    transactions.add(dtos);
+                String fullSha = (doc.commit != null) ? doc.commit.sha : null;
+                if (fullSha != null) {
+                    bySha.put(fullSha, doc);
+                } else {
+                    noShaList.add(doc);
                 }
             }
+        }
+
+        List<SemanticChangelogManager.ChangelogDocument> sorted = sortByAncestry(bySha);
+        sorted.addAll(noShaList);
+
+        List<List<SemanticChangeLog.ChangeDto>> transactions = new ArrayList<>();
+        for (SemanticChangelogManager.ChangelogDocument doc : sorted) {
+            List<SemanticChangeLog.ChangeDto> dtos = new ArrayList<>();
+            for (SemanticChangelogManager.ChangelogDocument.FileChangeInfo fc : doc.fileChanges) {
+                if (fc.semanticChanges == null) continue;
+                for (SemanticChangeEntry entry : fc.semanticChanges) {
+                    dtos.add(SemanticChangeEntryToChangeDtoConverter.convert(entry));
+                }
+            }
+            if (!dtos.isEmpty()) transactions.add(dtos);
         }
         return transactions;
     }
@@ -1763,7 +1796,7 @@ public class SemanticMergeEngine {
      * causing the caller to fall back to empty reaction-footprint estimates.
      *
      * @param dir directory containing changelog files for one branch
-     * @return always empty -- footprints not yet captured
+     * @return always empty as footprints not yet captured
      */
     private List<Set<String>> loadStoredFootprintsFromDir(Path dir) throws IOException {
         return List.of();
