@@ -30,7 +30,6 @@ public class SemanticMergeCommand {
      * @param interactionProvider user interaction provider for VSUM creation
      * @return the merge result
      */
-    /** Executes without conflict resolution (aborts on conflict). */
     public SemanticMergeResult execute(
             Path repoRoot,
             String sourceBranch,

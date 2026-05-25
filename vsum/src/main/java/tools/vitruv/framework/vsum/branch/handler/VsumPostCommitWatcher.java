@@ -121,7 +121,6 @@ public class VsumPostCommitWatcher {
   }
 
   private void watchLoop() {
-    LOGGER.debug("Post-commit watch loop started, polling every {}ms", POLL_INTERVAL_MS);
     while (running) {
       try {
         PostCommitTriggerFile.TriggerInfo info = triggerFile.checkAndClearTrigger();
@@ -130,13 +129,11 @@ public class VsumPostCommitWatcher {
         }
         Thread.sleep(POLL_INTERVAL_MS);
       } catch (InterruptedException e) {
-        LOGGER.debug("Post-commit watcher interrupted");
         running = false;
         Thread.currentThread().interrupt();
       } catch (Exception e) {
         LOGGER.error("Error in post-commit watcher loop, will continue", e);
       }
     }
-    LOGGER.debug("Post-commit watch loop exited");
   }
 }

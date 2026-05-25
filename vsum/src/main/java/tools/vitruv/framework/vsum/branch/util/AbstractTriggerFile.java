@@ -129,7 +129,6 @@ public abstract class AbstractTriggerFile<T extends AbstractTriggerFile.TriggerI
 
       try {
         Files.delete(triggerFilePath);
-        LOGGER.debug("Trigger file consumed and cleared: {}", triggerFilePath);
       } catch (IOException deleteEx) {
         LOGGER.warn("Failed to delete trigger file '{}'; skipping this cycle, will retry on next poll",
             triggerFilePath, deleteEx);
@@ -157,7 +156,6 @@ public abstract class AbstractTriggerFile<T extends AbstractTriggerFile.TriggerI
   protected void writeTrigger(String content) throws IOException {
     Files.createDirectories(triggerFilePath.getParent());
     Files.writeString(triggerFilePath, content);
-    LOGGER.debug("Trigger file written: {}", triggerFilePath);
   }
 
   /**

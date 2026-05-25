@@ -209,7 +209,6 @@ public class SemanticChangelogManager {
         }
       }
     } catch (IOException e) {
-      LOGGER.debug("Git object-store fallback failed for {}/{}: {}", branch, filePath, e.getMessage());
       return null;
     }
   }
@@ -247,8 +246,6 @@ public class SemanticChangelogManager {
           .filter(Files::isRegularFile)
           .findFirst();
       if (found.isPresent()) {
-        LOGGER.debug("Changelog for sha '{}' not found under branch '{}', resolved via fallback: {}",
-            shortSha, branch, found.get());
         return found.get();
       }
     }
@@ -398,7 +395,6 @@ public class SemanticChangelogManager {
         }
       }
     } catch (Exception e) {
-      LOGGER.debug("Could not build Git diff map for commit '{}': {}", commitSha, e.getMessage());
       return Map.of();
     }
   }

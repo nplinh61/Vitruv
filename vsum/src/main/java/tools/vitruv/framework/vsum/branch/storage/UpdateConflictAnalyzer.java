@@ -68,7 +68,6 @@ public class UpdateConflictAnalyzer {
         List<UpdateConflict> conflicts = new ArrayList<>();
 
         if (sourceChangelog == null || targetChangelog == null) {
-            LOGGER.debug("One or both changelogs are null, skipping update conflict analysis");
             return conflicts;
         }
 
@@ -102,10 +101,6 @@ public class UpdateConflictAnalyzer {
                             sourceEntry,
                             targetEntry
                     ));
-
-                    LOGGER.debug("Update conflict: both '{}' and '{}' modify {}.{} (uuid={})",
-                            sourceBranch, targetBranch,
-                            sourceEntry.getEClass(), feature, uuid);
                 }
             }
         }

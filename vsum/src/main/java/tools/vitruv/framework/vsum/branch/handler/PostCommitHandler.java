@@ -130,8 +130,6 @@ public class PostCommitHandler {
 
     if (changeBuffer != null && changeBuffer.hasChanges()) {
       writeSemanticChangelog(commitSha, branch, shortSha);
-    } else if (changeBuffer != null) {
-      LOGGER.debug("No semantic changes buffered for commit {} - skipping changelog", shortSha);
     }
   }
 

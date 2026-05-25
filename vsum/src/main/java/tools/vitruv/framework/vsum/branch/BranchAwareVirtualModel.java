@@ -147,7 +147,6 @@ public class BranchAwareVirtualModel implements InternalVirtualModel {
     checkNotNull(newBranch, "newBranch must not be null");
 
     if (newBranch.equals(activeBranchName)) {
-      LOGGER.debug("Already on branch '{}', skipping switch", newBranch);
       return;
     }
     LOGGER.info("Switching V-VSUM from branch '{}' to '{}'", oldBranch, newBranch);

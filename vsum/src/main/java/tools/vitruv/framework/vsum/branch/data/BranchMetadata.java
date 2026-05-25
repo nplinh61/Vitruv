@@ -109,7 +109,6 @@ public class BranchMetadata {
     json.addProperty("lastModified", lastModified.format(TIMESTAMP_FORMAT));
 
     Files.writeString(path, GSON.toJson(json));
-    LOGGER.debug("wrote branch metadata to {}", path);
   }
 
   /**
@@ -132,8 +131,6 @@ public class BranchMetadata {
     String parent = requireField(json, "parentBranch", path);
     LocalDateTime createdAt = parseFlexibleDateTime(requireField(json, "createdAt", path));
     LocalDateTime lastModified = parseFlexibleDateTime(requireField(json, "lastModified", path));
-
-    LOGGER.debug("read branch metadata from {}", path);
     return new BranchMetadata(name, state, parent, createdAt, lastModified, maturity);
   }
 

@@ -124,7 +124,6 @@ public class BranchManager {
     checkNotNull(name, "Branch name must not be null");
     checkNotNull(fromBranch, "Source branch must not be null");
     validateBranchName(name);
-    LOGGER.debug("createBranch called: name='{}', fromBranch='{}'", name, fromBranch);
 
     try (var git = Git.open(repoRoot.toFile())) {
       var repo = git.getRepository();
@@ -132,7 +131,6 @@ public class BranchManager {
       // resolve the source branch reference to verify it exists before creating anything
       var sourceRef = repo.findRef("refs/heads/" + fromBranch);
       if (sourceRef == null) {
-        LOGGER.debug("Source branch not found: '{}'", fromBranch);
         throw new BranchOperationException("Source branch does not exist: " + fromBranch);
       }
 
@@ -165,9 +163,6 @@ public class BranchManager {
           .setName(name)
           .setStartPoint(updatedSourceRef.getObjectId().getName())
           .call();
-      LOGGER.debug("Git branch created: name='{}', startPoint='{}'",
-          name, updatedSourceRef.getObjectId().getName());
-
       LOGGER.info("Created branch '{}' from '{}'", name, fromBranch);
       return metadata;
 
@@ -216,7 +211,6 @@ public class BranchManager {
 
       // notify the VirtualModel so it can reload its state to match the new branch
       if (postCheckoutHandler != null && oldBranch != null) {
-        LOGGER.debug("Invoking post-checkout handler for branch switch");
         postCheckoutHandler.onBranchSwitch(oldBranch, resolvedName);
       } else if (postCheckoutHandler == null) {
         LOGGER.warn("No post-checkout handler configured; VSUM will not be reloaded after "
@@ -340,10 +334,8 @@ public class BranchManager {
           var now = LocalDateTime.now();
           result.add(new BranchMetadata(name, BranchState.ACTIVE, "unknown", now, now,
               MaturityLevel.DRAFT));
-          LOGGER.debug("Branch '{}' has no metadata file, synthesized defaults", name);
         }
       }
-      LOGGER.debug("Listed {} branch(es)", result.size());
       return result;
 
     } catch (GitAPIException e) {
@@ -401,7 +393,6 @@ public class BranchManager {
 
       var exactRef = repo.findRef("refs/heads/" + name);
       if (exactRef != null) {
-        LOGGER.debug("Resolved identifier '{}' to branch name directly", name);
         return name;
       }
 
@@ -452,7 +443,6 @@ public class BranchManager {
               .add(metadata.getName());
         }
       }
-      LOGGER.debug("Built branch topology with {} parent(s) {}", topology.size(), topology);
       return topology;
 
     } catch (IOException e) {
@@ -534,7 +524,6 @@ public class BranchManager {
       if (Files.exists(metadataFile)) {
         return BranchMetadata.readFrom(metadataFile).getState();
       }
-      LOGGER.debug("Branch '{}' has no metadata, defaulting to ACTIVE", name);
       return BranchState.ACTIVE;
     } catch (IOException e) {
       throw new BranchOperationException(
@@ -556,8 +545,6 @@ public class BranchManager {
     var metadataFile = metadataPath(branchName);
 
     if (!Files.exists(metadataFile)) {
-      LOGGER.debug("No metadata file found for branch '{}', skipping MERGED status update",
-          branchName);
       return;
     }
 
@@ -629,7 +616,6 @@ public class BranchManager {
 
     Path metadataFile = metadataPath(branchName);
     if (Files.exists(metadataFile)) {
-      LOGGER.debug("Metadata already exists for branch '{}', skipping", branchName);
       return;
     }
     try {
@@ -661,8 +647,6 @@ public class BranchManager {
       if (!branchName.equals(parentBranch)) {
         commitMetadataFile(git, parentBranch, metadataFile);
       }
-      LOGGER.debug("Committed metadata for '{}' into Git tree(s) of '{}' and '{}'",
-          branchName, branchName, parentBranch);
     } catch (IOException e) {
       LOGGER.warn("Failed to commit metadata for branch '{}' into Git (non-critical): {}",
           branchName, e.getMessage());
@@ -799,7 +783,6 @@ public class BranchManager {
         throw new IOException(
             "Branch ref update for '" + branch + "' failed: " + result);
       }
-      LOGGER.debug("Committed metadata file '{}' to branch '{}'", file.getFileName(), branch);
     }
   }
 }

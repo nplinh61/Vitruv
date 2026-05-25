@@ -71,8 +71,6 @@ public class ValidationTriggerFile
     writeTrigger(String.format("%s%s%s%s%s%s%d",
         commitSha, DELIMITER, branch, DELIMITER, requestId, DELIMITER, timestamp));
 
-    LOGGER.debug("Created validation trigger: commit={}, branch={}, requestId={}",
-        commitSha.substring(0, Math.min(7, commitSha.length())), branch, requestId);
 
     return requestId;
   }
@@ -123,10 +121,6 @@ public class ValidationTriggerFile
       LOGGER.warn("Empty required field in validation trigger, discarding");
       return null;
     }
-
-    LOGGER.debug("Validation trigger parsed: commit={}, branch={}, requestId={}",
-        commitSha.substring(0, Math.min(7, commitSha.length())), branch, requestId);
-
     return new TriggerInfo(commitSha, branch, requestId, timestamp);
   }
 

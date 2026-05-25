@@ -386,7 +386,6 @@ public class MergeManager {
           .distinct()
           .toList();
     } catch (BranchOperationException e) {
-      LOGGER.debug("Semantic pre-check skipped (non-fatal): {}", e.getMessage());
       return List.of();
     }
   }
@@ -511,7 +510,6 @@ public class MergeManager {
         repoRoot.resolve(METADATA_DIR).resolve(sourceBranch + ".metadata");
 
     if (!Files.exists(metadataFile)) {
-      LOGGER.debug("No metadata file for '{}', skipping MERGED status update", sourceBranch);
       return;
     }
     try {
@@ -548,7 +546,6 @@ public class MergeManager {
       Repository repo = git.getRepository();
       ObjectId sourceHead = repo.resolve(sourceBranch);
       if (sourceHead == null) {
-        LOGGER.debug("Source branch '{}' not found for changelog copy", sourceBranch);
         return;
       }
 
@@ -608,7 +605,6 @@ public class MergeManager {
   private void writeMergeTrigger(
       ModelMergeResult result, String sourceBranch, String targetBranch) {
     if (restMode) {
-      LOGGER.debug("REST mode -- skipping merge trigger file");
       return;
     }
     try {
@@ -616,7 +612,6 @@ public class MergeManager {
           ? result.getMergeCommitSha()
           : "fast-forward";
       mergeTriggerFile.createTrigger(sha, sourceBranch, targetBranch);
-      LOGGER.debug("Merge trigger written for VsumMergeWatcher");
     } catch (IOException e) {
       LOGGER.warn("Failed to write merge trigger (non-critical): {}", e.getMessage());
     }
@@ -686,7 +681,6 @@ public class MergeManager {
               Files.createDirectories(target.getParent());
               Files.copy(p, target, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
               copied.add(relative.toString().replace('\\', '/'));
-              LOGGER.debug("Merged model file copied: {}", relative);
             } catch (IOException ex) {
               LOGGER.warn("Failed to copy merged model file {}: {}", p, ex.getMessage());
             }

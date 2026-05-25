@@ -1,5 +1,7 @@
 package tools.vitruv.framework.vsum.branch.merge;
 
+import lombok.Setter;
+
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -43,6 +45,11 @@ public final class MergeTracer {
     private static final DateTimeFormatter FILE_TS =
             DateTimeFormatter.ofPattern("yyyy-MM-dd_HHmmss");
 
+    /**
+     * -- SETTER --
+     * Enables or disables trace output globally (console + file). Default is enabled.
+     */
+    @Setter
     private static boolean enabled = !Boolean.getBoolean("merge.trace.disabled");
     private static Path outputDir = Path.of("merge-traces");
     private static BufferedWriter fileWriter;
@@ -50,11 +57,6 @@ public final class MergeTracer {
     private static String currentScenarioId;
 
     private MergeTracer() { }
-
-    /** Enables or disables trace output globally (console + file). Default is enabled. */
-    public static void setEnabled(boolean value) {
-        enabled = value;
-    }
 
     /** Returns whether tracing is currently enabled. */
     public static boolean isEnabled() {

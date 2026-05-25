@@ -337,7 +337,6 @@ public class CommitManager {
       if (hasModelChanges && changeBuffer == null) {
         try {
           triggerFile.createTrigger(commitSha, branch);
-          LOGGER.debug("Post-commit trigger written for changelog generation");
         } catch (IOException e) {
           // changelog generation failing should not undo the commit
           LOGGER.warn("Failed to write post-commit trigger (non-critical): {}",
@@ -395,13 +394,11 @@ public class CommitManager {
 
     for (String relativePath : candidates) {
       if (excluded.contains(relativePath)) {
-        LOGGER.debug("Skipping excluded file: {}", relativePath);
         continue;
       }
       if (isModelFile(relativePath)) {
         git.add().addFilepattern(relativePath).call();
         staged.add(relativePath);
-        LOGGER.debug("Staged model file: {}", relativePath);
       }
     }
 
@@ -412,7 +409,6 @@ public class CommitManager {
       if (!staged.contains(relativePath)) {
         git.add().addFilepattern(relativePath).call();
         staged.add(relativePath);
-        LOGGER.debug("Staged additional file: {}", relativePath);
       }
     }
 
@@ -464,7 +460,6 @@ public class CommitManager {
               try {
                 git.add().addFilepattern(relativePath).call();
                 staged.add(relativePath);
-                LOGGER.debug("Staged branch metadata: {}", relativePath);
               } catch (GitAPIException e) {
                 LOGGER.warn("Failed to stage branch metadata '{}' (non-critical): {}",
                     relativePath, e.getMessage());
@@ -490,7 +485,6 @@ public class CommitManager {
   private void stageVsumState(Git git, String branch, List<String> staged) {
     Path vsumDir = repoRoot.resolve(".vitruvius/vsum").resolve(branch);
     if (!Files.isDirectory(vsumDir)) {
-      LOGGER.debug("No V-SUM state directory for branch '{}', skipping", branch);
       return;
     }
     try {
@@ -520,8 +514,6 @@ public class CommitManager {
       SemanticChangeBuffer.DrainResult drainResult = changeBuffer.drainChanges();
 
       if (drainResult.changesByResource().isEmpty()) {
-        LOGGER.debug("No semantic changes to write for commit {}",
-            commitSha.substring(0, 7));
         return;
       }
 
@@ -544,7 +536,6 @@ public class CommitManager {
       for (Path file : writtenFiles) {
         String relativePath = repoRoot.relativize(file).toString().replace('\\', '/');
         git.add().addFilepattern(relativePath).call();
-        LOGGER.debug("Staged changelog file: {}", file.getFileName());
       }
       LOGGER.info("Staged {} changelog file(s) for commit {}",
           writtenFiles.size(), commitSha.substring(0, 7));

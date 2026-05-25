@@ -101,11 +101,9 @@ public class PreCommitHandler {
       warnings.add("No model resources found in V-SUM");
       return;
     }
-    LOGGER.debug("Validating {} resources", resources.size());
     for (Resource resource : resources) {
       try {
         if (!resource.isLoaded()) {
-          LOGGER.debug("Loading resource: {}", resource.getURI());
           resource.load(Collections.emptyMap());
         }
         if (!resource.getErrors().isEmpty()) {
@@ -195,7 +193,6 @@ public class PreCommitHandler {
         return;
       }
       // full link enumeration requires a correspondence model view API that is not yet exposed.
-      LOGGER.debug("Correspondence model is accessible");
     } catch (Exception e) {
       errors.add("Failed to access correspondence model: " + e.getMessage());
       LOGGER.error("Correspondence validation error", e);
@@ -213,7 +210,6 @@ public class PreCommitHandler {
         errors.add("UUID resolver is null");
         return;
       }
-      LOGGER.debug("UUID resolver is accessible");
     } catch (Exception e) {
       errors.add("Failed to access UUID resolver: " + e.getMessage());
       LOGGER.error("UUID resolver validation error", e);

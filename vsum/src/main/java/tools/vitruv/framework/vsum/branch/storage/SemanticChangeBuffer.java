@@ -159,9 +159,6 @@ public class SemanticChangeBuffer implements ChangePropagationListener {
       VitruviusChange<EObject> original = pc.getOriginalChange();
       List<EChange<EObject>> eChanges = original.getEChanges();
       if (!eChanges.isEmpty() && reactionEChanges.containsAll(eChanges)) {
-        LOGGER.debug(
-            "Skipping reaction PropagatedChange ({} EChange(s)) - not user-initiated",
-            eChanges.size());
         continue;
       }
       for (EChange<EObject> eChange : eChanges) {
@@ -175,9 +172,6 @@ public class SemanticChangeBuffer implements ChangePropagationListener {
       }
       collectFromVitruviusChange(original);
     }
-    LOGGER.debug("Buffer now holds {} atomic change(s) across {} resource(s), "
-        + "{} deletion UUID override(s)", totalChanges, changesByResource.size(),
-        deletionUuidOverrides.size());
   }
 
   /**
@@ -309,10 +303,6 @@ public class SemanticChangeBuffer implements ChangePropagationListener {
       URI uri = element.eResource().getURI();
       return uri != null ? uri.toString() : "unknown-resource";
     }
-
-    LOGGER.debug(
-        "Cannot determine resource URI for change of type '{}', filing under 'unknown-resource'",
-        change.getClass().getSimpleName());
     return "unknown-resource";
   }
 }

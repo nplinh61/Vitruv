@@ -67,7 +67,6 @@ public class GitStateLoader {
                 }
             }
         }
-        LOGGER.debug("Extracted {} files at commit {}", countFiles(tempDir), commitSha.substring(0, 7));
     }
 
     private long countFiles(Path dir) throws IOException {
@@ -109,7 +108,6 @@ public class GitStateLoader {
                         .setAllowEmpty(true)
                         .setAuthor("vitruvius-merge", "merge@vitruvius")
                         .call();
-                LOGGER.debug("Initialised scratch git repo (branch={}) in temp dir: {}", initBranch, vsumFolder);
             } catch (org.eclipse.jgit.api.errors.GitAPIException e) {
                 throw new IOException(
                         "failed to init scratch git repo in " + vsumFolder + ": " + e.getMessage(), e);
@@ -185,7 +183,6 @@ public class GitStateLoader {
         }
         Files.writeString(modelsFile, String.join(java.lang.System.lineSeparator(), modelUris)
                 + java.lang.System.lineSeparator());
-        LOGGER.debug("Fixed models.models ({} URIs) at {}", modelUris.size(), modelsFile);
     }
 
     /** Rewrites uuid.uuid so HierarchicalId file URIs reference the new vsumFolder. */
@@ -217,7 +214,6 @@ public class GitStateLoader {
         if (changed) {
             Files.writeString(uuidFile, String.join(java.lang.System.lineSeparator(), fixedLines)
                     + java.lang.System.lineSeparator());
-            LOGGER.debug("Fixed uuid.uuid ({} entries) at {}", fixedLines.size(), uuidFile);
         }
     }
 
@@ -230,7 +226,6 @@ public class GitStateLoader {
                 folderUri + "/$1$2\"");
         if (!fixed.equals(content)) {
             Files.writeString(corrFile, fixed);
-            LOGGER.debug("Fixed correspondences.correspondence at {}", corrFile);
         }
     }
 

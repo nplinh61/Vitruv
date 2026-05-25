@@ -109,7 +109,6 @@ public class VsumMergeWatcher {
   }
 
   private void watchLoop() {
-    LOGGER.debug("Merge watch loop started, polling every {}ms", POLL_INTERVAL_MS);
     while (running) {
       try {
         MergeTriggerFile.TriggerInfo info = triggerFile.checkAndClearTrigger();
@@ -118,14 +117,12 @@ public class VsumMergeWatcher {
         }
         Thread.sleep(POLL_INTERVAL_MS);
       } catch (InterruptedException e) {
-        LOGGER.debug("Merge watcher interrupted");
         running = false;
         Thread.currentThread().interrupt();
       } catch (Exception e) {
         LOGGER.error("Error in merge watcher loop, will continue", e);
       }
     }
-    LOGGER.debug("Merge watcher loop exited");
   }
 
   private void handleMergeRequest(MergeTriggerFile.TriggerInfo info) {
@@ -158,14 +155,11 @@ public class VsumMergeWatcher {
           return;
         }
         try {
-          LOGGER.debug("Lock acquired for merge validation (requestId='{}')", requestId);
           performMergeValidation(info, mergeShort, requestId);
         } finally {
           lock.release();
-          LOGGER.debug("Lock released (requestId='{}')", requestId);
           try {
             Files.deleteIfExists(lockFile);
-            LOGGER.debug("Lock file deleted (requestId='{}')", info.getRequestId());
           } catch (IOException deleteError) {
             LOGGER.warn("Failed to delete lock file (non-critical) (requestId='{}')",
                 info.getRequestId(), deleteError);

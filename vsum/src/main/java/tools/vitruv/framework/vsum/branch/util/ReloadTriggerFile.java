@@ -68,8 +68,6 @@ public class ReloadTriggerFile extends AbstractTriggerFile<ReloadTriggerFile.Tri
     long timestamp = System.currentTimeMillis();
     writeTrigger(String.format("%s%s%s%s%d%s%s",
         branchName, DELIMITER, requestId, DELIMITER, timestamp, DELIMITER, oldBranchName));
-    LOGGER.debug("Created reload trigger: branch='{}', oldBranch='{}', requestId='{}'",
-        branchName, oldBranchName, requestId);
     return requestId;
   }
 
@@ -133,10 +131,6 @@ public class ReloadTriggerFile extends AbstractTriggerFile<ReloadTriggerFile.Tri
       LOGGER.warn("Empty required field in reload trigger, discarding");
       return null;
     }
-
-    LOGGER.debug("Reload trigger parsed: branch='{}', oldBranch='{}', requestId='{}'",
-        branchName, oldBranchName, requestId);
-
     return new TriggerInfo(branchName, oldBranchName, requestId, timestamp);
   }
 

@@ -141,7 +141,6 @@ public class VsumValidationWatcher {
    * when one is found. Exits when {@link #running} becomes false or the thread is interrupted.
    */
   private void watchLoop() {
-    LOGGER.debug("Validation watch loop started, polling every {}ms", POLL_INTERVAL_MS);
     while (running) {
       try {
         ValidationTriggerFile.TriggerInfo info = triggerFile.checkAndClearTrigger();
@@ -150,14 +149,12 @@ public class VsumValidationWatcher {
         }
         Thread.sleep(POLL_INTERVAL_MS);
       } catch (InterruptedException e) {
-        LOGGER.debug("Validation watcher interrupted");
         running = false;
         Thread.currentThread().interrupt();
       } catch (Exception e) {
           LOGGER.error("Error in validation watcher loop, will continue", e);
       }
     }
-    LOGGER.debug("Validation watch loop exited");
   }
 
   /**
@@ -202,14 +199,11 @@ public class VsumValidationWatcher {
         }
 
         try {
-          LOGGER.debug("Lock acquired for validation (requestId='{}')", requestId);
           performValidation(info, commitShort, requestId);
         } finally {
           lock.release();
-          LOGGER.debug("Lock released (requestId='{}')", requestId);
           try {
             Files.deleteIfExists(lockFile);
-            LOGGER.debug("Lock file deleted (requestId='{}')", info.getRequestId());
           } catch (IOException deleteError) {
             LOGGER.warn("Failed to delete lock file (non-critical) (requestId='{}')",
                 info.getRequestId(), deleteError);
@@ -249,7 +243,6 @@ public class VsumValidationWatcher {
 
       try {
         resultFile.writeResult(result, requestId);
-        LOGGER.debug("Validation result files written (requestId='{}')", requestId);
       } catch (Exception e) {
         LOGGER.error("Failed to write validation result files (requestId='{}')", requestId, e);
       }
@@ -295,7 +288,6 @@ public class VsumValidationWatcher {
       BranchMetadata metadata = BranchMetadata.readFrom(metaFile);
       metadata.updateLastModified();
       metadata.writeTo(metaFile);
-      LOGGER.debug("Updated lastModified for branch '{}' on validation pass", branch);
     } catch (Exception e) {
       LOGGER.warn("Failed to update lastModified for branch '{}' (non-critical): {}",
           branch, e.getMessage());

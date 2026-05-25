@@ -203,14 +203,10 @@ public class SemanticConflictDetector {
       // No branch checkout is needed.
       List<String> shortShasA = collectShortShasSince(repo, headA, ancestor);
       List<String> shortShasB = collectShortShasSince(repo, headB, ancestor);
-      LOGGER.debug("Commits since ancestor - {}: {}, {}: {}",
-          branchA, shortShasA.size(), branchB, shortShasB.size());
       List<SemanticChangeEntry> changesA =
           loadChangesFromBranch(repo, headA, branchA, new HashSet<>(shortShasA));
       List<SemanticChangeEntry> changesB =
           loadChangesFromBranch(repo, headB, branchB, new HashSet<>(shortShasB));
-      LOGGER.debug("Semantic changes loaded - {}: {}, {}: {}",
-          branchA, changesA.size(), branchB, changesB.size());
 
       // Step 3: Direct conflict detection (original vs. original). 
       // Compares (elementUuid, feature) pairs across both branches without loading any model.
@@ -275,7 +271,6 @@ public class SemanticConflictDetector {
       // Step 7: Topological sort -> interleaving order (Kahn's algorithm).
       // Produces a linear replay order that respects all dependency edges.
       List<String> interleaving = computeTopologicalOrder(dependencyGraph);
-      LOGGER.debug("Step 7: interleaving order computed ({} commits).", interleaving.size());
 
       // Steps 8 + 9: Replay with iterative footprint refinement.
       // Applies each commit's original changes through the Vitruvius Reaction engine

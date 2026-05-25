@@ -28,7 +28,7 @@ import tools.vitruv.change.composite.propagation.ChangePropagationListener;
  *
  * <p>This class is <b>not registered in production</b>. The canonical listener for change
  * capture in production is
- * {@link tools.vitruv.framework.vsum.branch.SemanticChangeBuffer}.
+ * {@link tools.vitruv.framework.vsum.branch.storage.SemanticChangeBuffer}.
  * {@code ChangeLogCapture} provides richer data for the interleaved replay algorithm: it
  * records consequential footprints (element+feature pairs touched by Reactions) and
  * cascade-deleted child UUIDs, both of which are needed for the indirect conflict

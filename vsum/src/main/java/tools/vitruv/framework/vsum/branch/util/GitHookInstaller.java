@@ -221,7 +221,6 @@ public class GitHookInstaller {
     // .gitignore exists, only append if Vitruvius section not already present
     String existingContent = Files.readString(gitignoreFile);
     if (existingContent.contains("# This section is managed by Vitruvius")) {
-      LOGGER.debug(".gitignore already contains Vitruvius entries, skipping");
       return;
     }
 
@@ -248,7 +247,6 @@ public class GitHookInstaller {
     String existing = Files.exists(gitattributes) ? Files.readString(gitattributes) : null;
 
     if (existing != null && existing.contains(GITATTRIBUTES_GUARD)) {
-      LOGGER.debug(".gitattributes already has Vitruvius entries, skipping");
       return;
     }
 
@@ -365,12 +363,10 @@ public class GitHookInstaller {
   public void uninstallGitAttributes() throws IOException {
     Path gitattributes = repositoryRoot.resolve(".gitattributes");
     if (!Files.exists(gitattributes)) {
-      LOGGER.debug(".gitattributes does not exist, nothing to uninstall");
       return;
     }
     String content = Files.readString(gitattributes);
     if (!content.contains(GITATTRIBUTES_GUARD)) {
-      LOGGER.debug(".gitattributes has no Vitruvius section, nothing to uninstall");
       return;
     }
 
@@ -521,7 +517,6 @@ public class GitHookInstaller {
         throw new IOException("hook template not found in resources: " + resourcePath);
       }
       Files.copy(hookTemplate, hookPath, StandardCopyOption.REPLACE_EXISTING);
-      LOGGER.debug("copied hook template to: {}", hookPath);
     }
 
     makeExecutable(hookPath);
@@ -570,7 +565,6 @@ public class GitHookInstaller {
       perms.add(PosixFilePermission.GROUP_EXECUTE);
       perms.add(PosixFilePermission.OTHERS_EXECUTE);
       Files.setPosixFilePermissions(path, perms);
-      LOGGER.debug("set executable permissions on hook: {}", path);
     } catch (UnsupportedOperationException | IOException e) {
       // POSIX permissions are not available on Windows. The hook will still be executed
       // correctly by Git Bash, which interprets the shebang line without requiring the

@@ -4,12 +4,10 @@ package tools.vitruv.framework.vsum.branch.storage;
  * Classifies the origin of a model change to support the Vitruvius conflict
  * resolution rule: <em>original changes are preferred to consequential
  * changes.</em>
- *
  * An original change is one that a human developer physically typed
  * into an editor. A consequential change is an automatic update that
  * the Vitruvius consistency engine triggered to maintain cross-view
  * consistency.
- *
  * During merge-conflict resolution, original changes should never be
  * silently overruled by consequential changes. The {@link #priority} value
  * encodes this preference: higher priority wins in a conflict.

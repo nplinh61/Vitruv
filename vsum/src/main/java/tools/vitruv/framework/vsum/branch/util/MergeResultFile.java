@@ -64,9 +64,7 @@ public class MergeResultFile {
     Files.createDirectories(vitruviusDir);
     writeTextResult(result, getTextResultPath(requestId));
     writeJsonResult(result, requestId, getJsonResultPath(requestId));
-    LOGGER.debug("Wrote merge result for requestId='{}': valid={}, errors={}, warnings={}",
-        requestId, result.isValid(), result.getErrors().size(), result.getWarnings().size());
-  }
+   }
 
   /**
    * Writes a permanent merge metadata record to

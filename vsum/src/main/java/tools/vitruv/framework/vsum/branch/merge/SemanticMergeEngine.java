@@ -357,12 +357,10 @@ public class SemanticMergeEngine {
             for (int i = 0; i < m; i++) {
                 Set<String> filtered = filterFootprintsByKnownUuids(aStoredFP.get(i), knownUuids);
                 aReactionFP.add(filtered);
-                LOGGER.debug("A[{}] stored reactionFP = {}", i, filtered);
             }
             for (int j = 0; j < n; j++) {
                 Set<String> filtered = filterFootprintsByKnownUuids(bStoredFP.get(j), knownUuids);
                 bReactionFP.add(filtered);
-                LOGGER.debug("B[{}] stored reactionFP = {}", j, filtered);
             }
         }
 
@@ -387,7 +385,6 @@ public class SemanticMergeEngine {
                     Set<String> aRxnOverlapBDirect = new HashSet<>(aReactionFP.get(i));
                     aRxnOverlapBDirect.retainAll(bDirectFP.get(j));
                     if (!aRxnOverlapBDirect.isEmpty()) {
-                        LOGGER.debug("Edge A[{}] → B[{}] (aReaction ∩ bDirect = {})", i, j, aRxnOverlapBDirect);
                         graph.addEdge(graph.nodeA(i), graph.nodeB(j));
                     }
 
@@ -395,7 +392,6 @@ public class SemanticMergeEngine {
                     Set<String> bRxnOverlapADirect = new HashSet<>(bReactionFP.get(j));
                     bRxnOverlapADirect.retainAll(aDirectFP.get(i));
                     if (!bRxnOverlapADirect.isEmpty()) {
-                        LOGGER.debug("Edge B[{}] → A[{}] (bReaction ∩ aDirect = {})", j, i, bRxnOverlapADirect);
                         graph.addEdge(graph.nodeB(j), graph.nodeA(i));
                     }
                 }
@@ -630,14 +626,10 @@ public class SemanticMergeEngine {
                 } else {
                     actualBReactionFP.put(txnIndex, actualFP);
                 }
-
-                LOGGER.debug("Step {}: replayed {} changes from {}",
-                        step + 1, txnChanges.size(), fromA ? "A" : "B");
             }
         } catch (Exception e) {
             LOGGER.warn("[INTERLEAVE] Ordering {} is inapplicable (guard failure): {}",
                     orderingToString(ordering), e.getMessage());
-            LOGGER.debug("[INTERLEAVE] Guard failure details", e);
             MergeTracer.trace("[INTERLEAVE] Guard failure: " + e.getClass().getSimpleName()
                     + ": " + e.getMessage());
             vsum.dispose();
@@ -792,7 +784,6 @@ public class SemanticMergeEngine {
                 if (iBeforeJ || jBeforeI) {
                     // There is a dependency; preserve original order (i before j)
                     edges.add(new int[]{i, j});
-                    LOGGER.debug("Intra-branch edge A[{}] → A[{}] (footprint overlap)", i, j);
                 }
                 // If neither direction has overlap, commits are independent -- no edge
             }
@@ -808,7 +799,6 @@ public class SemanticMergeEngine {
 
                 if (iBeforeJ || jBeforeI) {
                     edges.add(new int[]{m + i, m + j});
-                    LOGGER.debug("Intra-branch edge B[{}] → B[{}] (footprint overlap)", i, j);
                 }
             }
         }
@@ -887,9 +877,6 @@ public class SemanticMergeEngine {
 
                 replayChanges(vsum, txnChanges, hidToUuid);
                 allApplied.addAll(txnChanges);
-
-                LOGGER.debug("Step {}: replayed {} changes from {}",
-                        step + 1, txnChanges.size(), fromA ? "A" : "B");
             }
         } catch (Exception e) {
             LOGGER.warn("[FALLBACK] Ordering {} is inapplicable (guard failure): {}",
@@ -1180,7 +1167,6 @@ public class SemanticMergeEngine {
         } catch (Exception e) {
             LOGGER.warn("Replay failed (guard failure -- element may have been deleted): {}",
                     e.getMessage());
-            LOGGER.debug("Replay guard failure details", e);
             targetVsum.dispose();
 
             // Report as a replay-applicability conflict instead of crashing.
@@ -1401,8 +1387,7 @@ public class SemanticMergeEngine {
                 // Verify UUID match: if we know the expected element via UUID,
                 // check that the HID resolved to the same object
                 if (expectedByUuid != null && result != expectedByUuid) {
-                    LOGGER.debug("HID '{}' resolved to wrong element (UUID mismatch), using UUID fallback",
-                            hidStr);
+
                     return expectedByUuid;
                 }
                 return result;
@@ -1413,7 +1398,6 @@ public class SemanticMergeEngine {
 
         // UUID fallback
         if (expectedByUuid != null) {
-            LOGGER.debug("UUID fallback resolved '{}'", hidStr);
             return expectedByUuid;
         }
         return null;
@@ -1929,10 +1913,6 @@ public class SemanticMergeEngine {
                     var baseFeature = elementOnBase.eClass().getEStructuralFeature(dto.featureName);
                     Object valueOnBase = baseFeature != null ? elementOnBase.eGet(baseFeature) : null;
                     if (java.util.Objects.equals(valueOnB, valueOnBase)) {
-                        // Value on B is unchanged from base -- not derived, skip warning
-                        LOGGER.debug("Skipping warning for uuid={}, feature={}: value on B ({}) "
-                                + "equals base (unchanged)", dto.affectedElementUuid,
-                                dto.featureName, valueOnB);
                         continue;
                     }
                 }

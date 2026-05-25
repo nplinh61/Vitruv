@@ -134,7 +134,6 @@ public class VsumReloadWatcher {
    * Exits when {@link #running} becomes false or the thread is interrupted.
    */
   private void watchLoop() {
-    LOGGER.debug("Watch loop started");
 
     while (running) {
       try {
@@ -145,13 +144,11 @@ public class VsumReloadWatcher {
         Thread.sleep(CHECK_INTERVAL_MS);
 
       } catch (InterruptedException e) {
-        LOGGER.debug("Watcher thread interrupted, stopping");
         break;
       } catch (Exception e) {
         LOGGER.error("Unexpected error in watcher loop", e);
       }
     }
-    LOGGER.debug("Watch loop exited");
   }
 
   /**
@@ -191,14 +188,11 @@ public class VsumReloadWatcher {
         }
 
         try {
-          LOGGER.debug("Lock acquired, performing reload (requestId='{}')", info.getRequestId());
           performSwitch(info);
         } finally {
           lock.release();
-          LOGGER.debug("Lock released (requestId='{}')", info.getRequestId());
           try {
             Files.deleteIfExists(lockFile);
-            LOGGER.debug("Lock file deleted (requestId='{}')", info.getRequestId());
           } catch (IOException deleteError) {
             LOGGER.warn("Failed to delete lock file (non-critical) (requestId='{}')",
                 info.getRequestId(), deleteError);

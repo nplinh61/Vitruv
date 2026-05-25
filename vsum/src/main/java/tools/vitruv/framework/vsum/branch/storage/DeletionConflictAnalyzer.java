@@ -50,7 +50,6 @@ public class DeletionConflictAnalyzer {
         List<DeletionConflict> conflicts = new ArrayList<>();
 
         if (sourceChangelog == null || targetChangelog == null) {
-            LOGGER.debug("One or both changelogs are null, skipping deletion conflict analysis");
             return conflicts;
         }
 
@@ -115,11 +114,6 @@ public class DeletionConflictAnalyzer {
                         ancestorAvailable,
                         deletion.getOrigin()
                 ));
-
-                LOGGER.debug("Deletion conflict: '{}' deleted {} ({}), " +
-                                "but '{}' has {} conflicting update(s)",
-                        deletingBranch, deletion.getEClass(), deletedUuid,
-                        updatingBranch, affected.size());
             }
         }
         return conflicts;

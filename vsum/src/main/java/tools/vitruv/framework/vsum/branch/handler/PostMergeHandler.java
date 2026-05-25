@@ -160,7 +160,6 @@ public class PostMergeHandler {
         errors.add("UUID resolver is null after merge");
         return;
       }
-      LOGGER.debug("UUID resolver is accessible after merge");
     } catch (Exception e) {
       errors.add("Failed to access UUID resolver after merge: " + e.getMessage());
       LOGGER.error("UUID resolver access failed after merge", e);
@@ -175,7 +174,6 @@ public class PostMergeHandler {
         errors.add("Correspondence model is null after merge");
         return;
       }
-      LOGGER.debug("Correspondence model is accessible after merge");
     } catch (Exception e) {
       errors.add("Failed to access correspondence model after merge: " + e.getMessage());
       LOGGER.error("Correspondence model access failed after merge", e);
@@ -231,7 +229,6 @@ public class PostMergeHandler {
       warnings.add("No model resources found in VSUM after merge");
       return;
     }
-    LOGGER.debug("Validating {} resources after merge", resources.size());
 
     for (Resource resource : resources) {
       try {
@@ -313,7 +310,6 @@ public class PostMergeHandler {
     try {
       if (Files.exists(targetVsum)) {
         deleteDirectory(targetVsum);
-        LOGGER.debug("Removed stale VSUM state for target branch '{}'", targetBranch);
       }
 
       if (hasVsumContent(sourceVsum)) {

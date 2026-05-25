@@ -89,8 +89,6 @@ public class PostCheckoutHandler {
       VsumFileSystemLayout newLayout = new VsumFileSystemLayout(virtualModel.getFolder());
       newLayout.prepare();
       newLayout.inheritFromBranchIfEmpty(oldBranch);
-
-      LOGGER.debug("reinitializing VirtualModel for branch '{}'", newBranch);
       virtualModel.reinitialize(newLayout);
       LOGGER.info("VirtualModel reinitialized successfully for branch '{}'", newBranch);
 
